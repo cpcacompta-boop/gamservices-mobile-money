@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GAMServices — Mobile Money</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FAF6EC;
+    --paper-line:#E6DDC6;
+    --ink:#1F2421;
+    --ink-soft:#5B6259;
+    --cover:#16332E;
+    --cover-light:#1F4941;
+    --gold:#C98A2B;
+    --gold-light:#E0A94E;
+    --rust:#B23A22;
+    --rust-soft:#F3DED7;
+    --green-soft:#DCE8D6;
+    --green-ink:#2F5233;
+    --display:'Fraunces', serif;
+    --body:'Inter', sans-serif;
+    --mono:'IBM Plex Mono', monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:var(--body);color:var(--ink);background:var(--paper);}
+  #app{display:flex;min-height:100vh;}
+
+  /* ---- SIDEBAR ---- */
+  .sidebar{
+    width:250px;flex-shrink:0;background:var(--cover);color:#EFEAE0;
+    display:flex;flex-direction:column;padding:28px 0;
+    position:relative;
+  }
+  .sidebar::after{
+    content:"";position:absolute;top:0;right:0;bottom:0;width:6px;
+    background:repeating-linear-gradient(180deg,var(--gold) 0 10px, transparent 10px 20px);
+    opacity:.55;
+  }
+  .brand{padding:0 24px 24px 24px;border-bottom:1px solid rgba(255,255,255,.12);margin-bottom:18px;}
+  .brand .mark{
+    font-family:var(--display);font-size:13px;letter-spacing:.28em;color:var(--gold-light);
+    text-transform:uppercase;margin-bottom:6px;
+  }
+  .brand .title{font-family:var(--display);font-weight:600;font-size:22px;line-height:1.15;}
+  .brand .sub{font-family:var(--mono);font-size:11px;color:#9FB3AC;margin-top:6px;letter-spacing:.03em;}
+
+  nav{display:flex;flex-direction:column;gap:2px;padding:0 12px;}
+  nav button{
+    all:unset;cursor:pointer;padding:11px 14px;border-radius:6px;
+    font-family:var(--body);font-size:14px;font-weight:500;color:#D9D3C4;
+    display:flex;align-items:center;gap:10px;justify-content:space-between;
+  }
+  nav button .lbl{display:flex;align-items:center;gap:10px;}
+  nav button .idx{font-family:var(--mono);font-size:11px;color:#7C8A83;}
+  nav button:hover{background:rgba(255,255,255,.06);color:#fff;}
+  nav button.active{background:var(--gold);color:var(--cover);font-weight:600;}
+  nav button.active .idx{color:var(--cover);opacity:.6;}
+  .badge-alert{
+    background:var(--rust);color:#fff;font-family:var(--mono);font-size:10px;
+    padding:1px 7px;border-radius:20px;
+  }
+
+  /* ---- MAIN ---- */
+  .content{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .topbar{
+    padding:26px 40px;border-bottom:1px solid var(--paper-line);
+    display:flex;align-items:baseline;justify-content:space-between;
+    background:
+      repeating-linear-gradient(var(--paper) 0 27px, var(--paper-line) 27px 28px);
+    background-size:100% 28px;
+  }
+  .topbar h1{font-family:var(--display);font-weight:600;font-size:28px;margin:0;}
+  .topbar .today{font-family:var(--mono);font-size:12px;color:var(--ink-soft);}
+  .view{padding:32px 40px;}
+
+  /* ---- CARDS / STATS ---- */
+  .stat-row{display:flex;gap:16px;margin-bottom:28px;flex-wrap:wrap;}
+  .stat{
+    background:#fff;border:1px solid var(--paper-line);border-radius:10px;
+    padding:18px 20px;min-width:180px;flex:1;
+    box-shadow:0 1px 0 var(--paper-line);
+  }
+  .stat .num{font-family:var(--mono);font-size:28px;font-weight:600;color:var(--cover);}
+  .stat .lbl{font-size:12px;color:var(--ink-soft);margin-top:4px;}
+  .stat.warn .num{color:var(--rust);}
+
+  /* ---- TABLE (ledger style) ---- */
+  .panel{background:#fff;border:1px solid var(--paper-line);border-radius:10px;overflow:hidden;margin-bottom:28px;}
+  .panel-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:16px 20px;border-bottom:1px solid var(--paper-line);
+  }
+  .panel-head h2{font-family:var(--display);font-size:17px;font-weight:600;margin:0;}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  thead th{
+    text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-soft);padding:10px 20px;
+    border-bottom:1px solid var(--paper-line);
+  }
+  tbody td{padding:12px 20px;border-bottom:1px solid var(--paper-line);}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:#FBF8F1;}
+  td.num, th.num{font-family:var(--mono);text-align:right;}
+  .empty-row td{text-align:center;color:var(--ink-soft);padding:26px;font-style:italic;}
+
+  .pill{
+    display:inline-block;padding:2px 10px;border-radius:20px;font-family:var(--mono);
+    font-size:11px;font-weight:600;
+  }
+  .pill.solde{background:var(--green-soft);color:var(--green-ink);}
+  .pill.partiel{background:#F5E7C9;color:#8A6316;}
+  .pill.attente{background:#EAE6D9;color:var(--ink-soft);}
+  .pill.alerte{background:var(--rust-soft);color:var(--rust);}
+
+  /* ---- BUTTONS ---- */
+  .btn{
+    all:unset;cursor:pointer;font-family:var(--body);font-weight:600;font-size:13px;
+    padding:9px 16px;border-radius:6px;background:var(--gold);color:var(--cover);
+  }
+  .btn:hover{background:var(--gold-light);}
+  .btn.ghost{background:transparent;border:1px solid var(--paper-line);color:var(--ink);}
+  .btn.ghost:hover{border-color:var(--gold);}
+  .btn.small{padding:6px 12px;font-size:12px;}
+
+  /* ---- FORM ---- */
+  .form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;padding:20px;}
+  .field{display:flex;flex-direction:column;gap:6px;}
+  .field label{font-size:12px;font-weight:600;color:var(--ink-soft);}
+  .field input, .field select{
+    font-family:var(--body);font-size:14px;padding:9px 11px;border:1px solid var(--paper-line);
+    border-radius:6px;background:var(--paper);color:var(--ink);
+  }
+  .field input:focus, .field select:focus{outline:2px solid var(--gold);outline-offset:1px;}
+  .field.span2{grid-column:span 2;}
+  .form-actions{padding:0 20px 20px 20px;display:flex;gap:10px;align-items:center;}
+  .msg{font-family:var(--mono);font-size:12px;padding:0 20px 14px 20px;}
+  .msg.ok{color:var(--green-ink);}
+  .msg.err{color:var(--rust);}
+
+  .loading{padding:24px;font-family:var(--mono);font-size:12px;color:var(--ink-soft);}
+
+  @media (max-width:820px){
+    #app{flex-direction:column;}
+    .sidebar{width:100%;flex-direction:row;overflow-x:auto;padding:14px;}
+    .sidebar::after{display:none;}
+    .brand{display:none;}
+    nav{flex-direction:row;padding:0;}
+    .form-grid{grid-template-columns:1fr;}
+    .field.span2{grid-column:span 1;}
+    .view{padding:20px;}
+    .topbar{padding:20px;}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">GAMServices</div>
+      <div class="title">Registre<br>Mobile Money</div>
+      <div class="sub">// carnet de comptes</div>
+    </div>
+    <nav id="nav"></nav>
+  </aside>
+  <div class="content">
+    <div class="topbar">
+      <h1 id="view-title">Tableau de bord</h1>
+      <div class="today" id="today"></div>
+    </div>
+    <div class="view" id="view-root"><div class="loading">Chargement…</div></div>
+  </div>
+</div>
+
+<script>
+const API = '';
+
+const NAV_ITEMS = [
+  {id:'dashboard', label:'Tableau de bord', idx:'00'},
+  {id:'operations', label:'Opérations', idx:'01'},
+  {id:'versements', label:'Versements', idx:'02'},
+  {id:'alertes', label:'Alertes', idx:'03'},
+  {id:'pdv', label:'Points de vente', idx:'04'},
+  {id:'zones', label:'Zones', idx:'05'},
+  {id:'commerciaux', label:'Commerciaux', idx:'06'},
+  {id:'masters', label:'Masters', idx:'07'},
+];
+
+let STATE = { view:'dashboard', reseaux:[], masters:[], commerciaux:[], zones:[], pdv:[], operations:[], alertes:[] };
+
+function fmtMontant(n){
+  return Number(n).toLocaleString('fr-FR', {minimumFractionDigits:0}) + ' F';
+}
+function fmtDate(d){
+  if(!d) return '—';
+  const date = new Date(d);
+  return date.toLocaleDateString('fr-FR', {day:'2-digit', month:'short', year:'numeric'});
+}
+function statutPill(statut, montant_restant){
+  if (montant_restant > 0 && statut !== 'SOLDE') {
+    const map = {EN_ATTENTE:['attente','En attente'], PARTIEL:['partiel','Partiel']};
+    const [cls,label] = map[statut] || ['attente', statut];
+    return `<span class="pill ${cls}">${label}</span>`;
+  }
+  return `<span class="pill solde">Soldé</span>`;
+}
+
+async function api(path, opts){
+  const res = await fetch(API + path, opts);
+  if(!res.ok){
+    const body = await res.json().catch(()=>({error:'Erreur inconnue'}));
+    throw new Error(body.error || 'Erreur serveur');
+  }
+  return res.json();
+}
+
+async function loadAll(){
+  const [reseaux, masters, commerciaux, zones, pdv, operations, alertes] = await Promise.all([
+    api('/reseaux'), api('/masters'), api('/commerciaux'), api('/zones'),
+    api('/pdv'), api('/operations'), api('/alertes')
+  ]);
+  Object.assign(STATE, {reseaux, masters, commerciaux, zones, pdv, operations, alertes});
+}
+
+function renderNav(){
+  const nav = document.getElementById('nav');
+  nav.innerHTML = NAV_ITEMS.map(item => {
+    const alertCount = item.id === 'alertes' && STATE.alertes.length ? `<span class="badge-alert">${STATE.alertes.length}</span>` : '';
+    return `<button data-view="${item.id}" class="${STATE.view===item.id?'active':''}">
+      <span class="lbl"><span class="idx">${item.idx}</span>${item.label}</span>${alertCount}
+    </button>`;
+  }).join('');
+  nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+}
+
+function setView(view){
+  STATE.view = view;
+  document.getElementById('view-title').textContent = NAV_ITEMS.find(i=>i.id===view).label;
+  renderNav();
+  renderView();
+}
+
+function renderView(){
+  const root = document.getElementById('view-root');
+  const renderers = {
+    dashboard: renderDashboard, operations: renderOperations, versements: renderVersementsView,
+    alertes: renderAlertes, pdv: renderPdv, zones: renderZones,
+    commerciaux: renderCommerciaux, masters: renderMasters
+  };
+  root.innerHTML = renderers[STATE.view]();
+  attachViewHandlers();
+}
+
+/* ---------- DASHBOARD ---------- */
+function renderDashboard(){
+  const totalDu = STATE.operations.reduce((s,o)=>s+Number(o.montant_du),0);
+  const totalRestant = STATE.operations.reduce((s,o)=>s+Number(o.montant_restant),0);
+  return `
+    <div class="stat-row">
+      <div class="stat"><div class="num">${STATE.pdv.length}</div><div class="lbl">Points de vente</div></div>
+      <div class="stat"><div class="num">${STATE.operations.length}</div><div class="lbl">Opérations enregistrées</div></div>
+      <div class="stat"><div class="num">${fmtMontant(totalDu)}</div><div class="lbl">Total dû (cumulé)</div></div>
+      <div class="stat warn"><div class="num">${STATE.alertes.length}</div><div class="lbl">PDV en alerte</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Dernières opérations</h2>
+        <button class="btn small" data-view="operations">Voir tout</button></div>
+      ${tableOperations(STATE.operations.slice(0,6))}
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Alertes actives</h2>
+        <button class="btn small" data-view="alertes">Voir tout</button></div>
+      ${tableAlertes(STATE.alertes.slice(0,6))}
+    </div>
+  `;
+}
+
+/* ---------- OPERATIONS ---------- */
+function tableOperations(ops){
+  if(!ops.length) return `<table><tbody><tr class="empty-row"><td>Aucune opération pour l'instant</td></tr></tbody></table>`;
+  return `<table>
+    <thead><tr><th>PDV</th><th>Type</th><th>Réseau</th><th class="num">Montant dû</th><th class="num">Reste</th><th>Échéance</th><th>Statut</th></tr></thead>
+    <tbody>${ops.map(o=>`
+      <tr>
+        <td>${o.pdv_nom}</td>
+        <td>${o.type_operation === 'VENTE_UV' ? 'Vente UV' : 'Retour UV'}</td>
+        <td>${o.reseau_nom}</td>
+        <td class="num">${fmtMontant(o.montant_du)}</td>
+        <td class="num">${fmtMontant(o.montant_restant)}</td>
+        <td>${fmtDate(o.date_limite_reglement)}</td>
+        <td>${statutPill(o.statut, o.montant_restant)}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+function renderOperations(){
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>Nouvelle opération</h2></div>
+      <form id="form-operation">
+        <div class="form-grid">
+          <div class="field"><label>Point de vente</label>
+            <select name="pdv_id" required>${STATE.pdv.map(p=>`<option value="${p.id}">${p.nom} — ${p.zone_nom}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Type</label>
+            <select name="type_operation" required>
+              <option value="VENTE_UV">Vente d'UV</option>
+              <option value="RETOUR_UV">Retour d'UV</option>
+            </select>
+          </div>
+          <div class="field"><label>Réseau</label>
+            <select name="reseau_id" required>${STATE.reseaux.map(r=>`<option value="${r.id}">${r.nom}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Montant dû (FCFA)</label><input type="number" name="montant_du" min="1" required></div>
+          <div class="field"><label>Initié par</label>
+            <select name="initiateur_type" id="initiateur_type" required>
+              <option value="MASTER">Master</option>
+              <option value="COMMERCIAL">Commercial</option>
+            </select>
+          </div>
+          <div class="field"><label>Agent</label>
+            <select name="initiateur_id" id="initiateur_id" required></select>
+          </div>
+          <div class="field"><label>Canal</label>
+            <select name="canal_deplacement">
+              <option value="DIRECT_SIEGE">PDV vient au siège</option>
+              <option value="VIA_COMMERCIAL">Via le commercial (PDV éloigné)</option>
+            </select>
+          </div>
+        </div>
+        <div class="msg" id="msg-operation"></div>
+        <div class="form-actions"><button class="btn" type="submit">Enregistrer l'opération</button></div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Toutes les opérations</h2></div>
+      ${tableOperations(STATE.operations)}
+    </div>
+  `;
+}
+
+function refreshInitiateurOptions(){
+  const type = document.getElementById('initiateur_type').value;
+  const sel = document.getElementById('initiateur_id');
+  const list = type === 'MASTER' ? STATE.masters : STATE.commerciaux;
+  sel.innerHTML = list.map(x=>`<option value="${x.id}">${x.nom}</option>`).join('') || '<option value="">Aucun agent créé</option>';
+}
+
+/* ---------- VERSEMENTS ---------- */
+function renderVersementsView(){
+  const openOps = STATE.operations.filter(o=>Number(o.montant_restant) > 0);
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>Enregistrer un versement</h2></div>
+      <form id="form-versement">
+        <div class="form-grid">
+          <div class="field span2"><label>Opération concernée</label>
+            <select name="operation_id" required>
+              ${openOps.map(o=>`<option value="${o.id}">${o.pdv_nom} — ${o.reseau_nom} — reste ${fmtMontant(o.montant_restant)}</option>`).join('') || '<option value="">Aucune opération ouverte</option>'}
+            </select>
+          </div>
+          <div class="field"><label>Mode</label>
+            <select name="mode" id="mode-versement" required>
+              <option value="CASH">Espèces (Cash)</option>
+              <option value="UV">UV (réseau)</option>
+            </select>
+          </div>
+          <div class="field" id="wrap-reseau-versement"><label>Réseau UV</label>
+            <select name="reseau_id">${STATE.reseaux.map(r=>`<option value="${r.id}">${r.nom}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Montant (FCFA)</label><input type="number" name="montant" min="1" required></div>
+          <div class="field span2"><label>Note (optionnel)</label><input type="text" name="note" placeholder="ex: remis par le commercial Koffi"></div>
+        </div>
+        <div class="msg" id="msg-versement"></div>
+        <div class="form-actions"><button class="btn" type="submit">Enregistrer le versement</button></div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Opérations avec un reste à payer</h2></div>
+      ${tableOperations(openOps)}
+    </div>
+  `;
+}
+
+/* ---------- ALERTES ---------- */
+function tableAlertes(rows){
+  if(!rows.length) return `<table><tbody><tr class="empty-row"><td>Aucune alerte — tous les PDV sont à jour ✅</td></tr></tbody></table>`;
+  return `<table>
+    <thead><tr><th>PDV</th><th>Réseau</th><th>Type</th><th class="num">Dû</th><th class="num">Versé</th><th class="num">Reste</th><th>Échéance</th></tr></thead>
+    <tbody>${rows.map(a=>`
+      <tr>
+        <td>${a.pdv_nom}</td>
+        <td>${a.reseau_nom}</td>
+        <td>${a.type_operation === 'VENTE_UV' ? 'Vente UV' : 'Retour UV'}</td>
+        <td class="num">${fmtMontant(a.montant_du)}</td>
+        <td class="num">${fmtMontant(a.montant_verse)}</td>
+        <td class="num"><span class="pill alerte">${fmtMontant(a.montant_restant)}</span></td>
+        <td>${fmtDate(a.date_limite_reglement)}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+function renderAlertes(){
+  return `<div class="panel"><div class="panel-head"><h2>Points de vente n'ayant pas soldé leur obligation</h2></div>${tableAlertes(STATE.alertes)}</div>`;
+}
+
+/* ---------- PDV ---------- */
+function renderPdv(){
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>Nouveau point de vente</h2></div>
+      <form id="form-pdv">
+        <div class="form-grid">
+          <div class="field"><label>Nom du PDV</label><input type="text" name="nom" required></div>
+          <div class="field"><label>Téléphone</label><input type="text" name="telephone"></div>
+          <div class="field"><label>Zone</label>
+            <select name="zone_id" required>${STATE.zones.map(z=>`<option value="${z.id}">${z.nom}</option>`).join('') || '<option value="">Crée d\'abord une zone</option>'}</select>
+          </div>
+          <div class="field"><label>Proximité du siège</label>
+            <select name="est_proche_siege"><option value="false">Éloigné (passe par le commercial)</option><option value="true">Proche (vient au siège)</option></select>
+          </div>
+        </div>
+        <div class="msg" id="msg-pdv"></div>
+        <div class="form-actions"><button class="btn" type="submit">Créer le PDV</button></div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Tous les PDV</h2></div>
+      <table><thead><tr><th>Nom</th><th>Zone</th><th>Téléphone</th><th>Proximité</th></tr></thead>
+      <tbody>${STATE.pdv.length ? STATE.pdv.map(p=>`
+        <tr><td>${p.nom}</td><td>${p.zone_nom}</td><td>${p.telephone||'—'}</td><td>${p.est_proche_siege ? 'Proche du siège' : 'Éloigné'}</td></tr>
+      `).join('') : `<tr class="empty-row"><td colspan="4">Aucun PDV enregistré</td></tr>`}</tbody></table>
+    </div>
+  `;
+}
+
+/* ---------- ZONES ---------- */
+function renderZones(){
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>Nouvelle zone</h2></div>
+      <form id="form-zone">
+        <div class="form-grid">
+          <div class="field"><label>Nom de la zone</label><input type="text" name="nom" required></div>
+          <div class="field"><label>Commercial responsable</label>
+            <select name="commercial_id" required>${STATE.commerciaux.map(c=>`<option value="${c.id}">${c.nom}</option>`).join('') || '<option value="">Crée d\'abord un commercial</option>'}</select>
+          </div>
+        </div>
+        <div class="msg" id="msg-zone"></div>
+        <div class="form-actions"><button class="btn" type="submit">Créer la zone</button></div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Toutes les zones</h2></div>
+      <table><thead><tr><th>Zone</th><th>Commercial responsable</th></tr></thead>
+      <tbody>${STATE.zones.length ? STATE.zones.map(z=>`<tr><td>${z.nom}</td><td>${z.commercial_nom}</td></tr>`).join('') : `<tr class="empty-row"><td colspan="2">Aucune zone enregistrée</td></tr>`}</tbody></table>
+    </div>
+  `;
+}
+
+/* ---------- COMMERCIAUX ---------- */
+function renderCommerciaux(){
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>Nouveau commercial</h2></div>
+      <form id="form-commercial">
+        <div class="form-grid">
+          <div class="field"><label>Nom</label><input type="text" name="nom" required></div>
+          <div class="field"><label>Téléphone</label><input type="text" name="telephone"></div>
+        </div>
+        <div class="msg" id="msg-commercial"></div>
+        <div class="form-actions"><button class="btn" type="submit">Créer le commercial</button></div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Tous les commerciaux</h2></div>
+      <table><thead><tr><th>Nom</th><th>Téléphone</th></tr></thead>
+      <tbody>${STATE.commerciaux.length ? STATE.commerciaux.map(c=>`<tr><td>${c.nom}</td><td>${c.telephone||'—'}</td></tr>`).join('') : `<tr class="empty-row"><td colspan="2">Aucun commercial enregistré</td></tr>`}</tbody></table>
+    </div>
+  `;
+}
+
+/* ---------- MASTERS ---------- */
+function renderMasters(){
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>Nouveau master</h2></div>
+      <form id="form-master">
+        <div class="form-grid">
+          <div class="field"><label>Nom</label><input type="text" name="nom" required></div>
+          <div class="field"><label>Téléphone</label><input type="text" name="telephone"></div>
+          <div class="field span2"><label>Adresse du siège</label><input type="text" name="adresse_siege"></div>
+        </div>
+        <div class="msg" id="msg-master"></div>
+        <div class="form-actions"><button class="btn" type="submit">Créer le master</button></div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Tous les masters</h2></div>
+      <table><thead><tr><th>Nom</th><th>Téléphone</th><th>Siège</th></tr></thead>
+      <tbody>${STATE.masters.length ? STATE.masters.map(m=>`<tr><td>${m.nom}</td><td>${m.telephone||'—'}</td><td>${m.adresse_siege||'—'}</td></tr>`).join('') : `<tr class="empty-row"><td colspan="3">Aucun master enregistré</td></tr>`}</tbody></table>
+    </div>
+  `;
+}
+
+/* ---------- HANDLERS ---------- */
+function attachViewHandlers(){
+  document.querySelectorAll('button[data-view]').forEach(b=>{
+    if(!b.closest('nav')) b.addEventListener('click', ()=>setView(b.dataset.view));
+  });
+
+  const formMaster = document.getElementById('form-master');
+  if(formMaster) formMaster.addEventListener('submit', e => handleCreate(e, '/masters', 'masters', 'msg-master'));
+
+  const formCommercial = document.getElementById('form-commercial');
+  if(formCommercial) formCommercial.addEventListener('submit', e => handleCreate(e, '/commerciaux', 'commerciaux', 'msg-commercial'));
+
+  const formZone = document.getElementById('form-zone');
+  if(formZone) formZone.addEventListener('submit', e => handleCreate(e, '/zones', 'zones', 'msg-zone'));
+
+  const formPdv = document.getElementById('form-pdv');
+  if(formPdv) formPdv.addEventListener('submit', e => handleCreate(e, '/pdv', 'pdv', 'msg-pdv'));
+
+  const formOperation = document.getElementById('form-operation');
+  if(formOperation){
+    refreshInitiateurOptions();
+    document.getElementById('initiateur_type').addEventListener('change', refreshInitiateurOptions);
+    formOperation.addEventListener('submit', e => handleCreate(e, '/operations', 'operations', 'msg-operation'));
+  }
+
+  const formVersement = document.getElementById('form-versement');
+  if(formVersement){
+    const modeSel = document.getElementById('mode-versement');
+    const wrapReseau = document.getElementById('wrap-reseau-versement');
+    const toggleReseau = () => wrapReseau.style.display = modeSel.value === 'UV' ? 'flex' : 'none';
+    toggleReseau();
+    modeSel.addEventListener('change', toggleReseau);
+    formVersement.addEventListener('submit', e => handleCreate(e, '/versements', 'versements', 'msg-versement'));
+  }
+}
+
+async function handleCreate(e, endpoint, refreshKey, msgId){
+  e.preventDefault();
+  const form = e.target;
+  const msgEl = document.getElementById(msgId);
+  const data = Object.fromEntries(new FormData(form).entries());
+  msgEl.textContent = 'Enregistrement…';
+  msgEl.className = 'msg';
+  try{
+    await api(endpoint, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    msgEl.textContent = '✔ Enregistré avec succès';
+    msgEl.className = 'msg ok';
+    await loadAll();
+    if(refreshKey === 'versements'){ STATE.view = 'operations'; }
+    renderNav();
+    renderView();
+  }catch(err){
+    msgEl.textContent = '✘ ' + err.message;
+    msgEl.className = 'msg err';
+  }
+}
+
+/* ---------- INIT ---------- */
+async function init(){
+  document.getElementById('today').textContent = new Date().toLocaleDateString('fr-FR', {weekday:'long', day:'2-digit', month:'long', year:'numeric'});
+  try{
+    await loadAll();
+  }catch(err){
+    document.getElementById('view-root').innerHTML = `<div class="panel"><div class="panel-head"><h2>Erreur de connexion</h2></div><div class="msg err" style="padding:20px;">${err.message}</div></div>`;
+    renderNav();
+    return;
+  }
+  renderNav();
+  renderView();
+}
+init();
+</script>
+</body>
+</html>
