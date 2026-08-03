@@ -8,6 +8,7 @@
 
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const { Pool } = require('pg');
 const cors = require('cors');
 require('dotenv').config();
@@ -16,9 +17,11 @@ const app = express();
 app.use(cors());
 // Limite élevée : on reçoit des images en base64
 app.use(express.json({ limit: '15mb' }));
-// Sert index.html directement depuis le même dossier que index.js
-// (pas besoin de créer un sous-dossier "public" — tout reste à plat)
-app.use(express.static(__dirname, { index: 'index.html' }));
+// Sert le frontend. On cherche index.html à côté de index.js OU dans un dossier "public".
+// Comme ça ça marche quelle que soit la façon dont les fichiers sont rangés dans le dépôt.
+const STATIC_DIR = [__dirname, path.join(__dirname, 'public')]
+  .find(d => fs.existsSync(path.join(d, 'index.html'))) || __dirname;
+app.use(express.static(STATIC_DIR));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -722,6 +725,22 @@ app.get('/stats', wrap(async (req, res) => {
     total_du: Number(du.rows[0].total)
   });
 }));
+
+/* =====================================================================
+   FILET DE SÉCURITÉ : toute page non-API renvoie index.html
+   (évite définitivement le message "Cannot GET /")
+   ===================================================================== */
+app.get('*', (req, res) => {
+  const file = path.join(STATIC_DIR, 'index.html');
+  if (fs.existsSync(file)) return res.sendFile(file);
+  res.status(200).type('html').send(
+    '<div style="font-family:sans-serif;max-width:560px;margin:60px auto;line-height:1.6">' +
+    '<h2>Backend GAMServices en ligne ✅</h2>' +
+    '<p>Le serveur tourne bien, mais le fichier <b>index.html</b> est introuvable.</p>' +
+    '<p>Vérifie que <b>index.html</b> se trouve dans le <b>même dossier</b> que <b>index.js</b> ' +
+    'dans ton dépôt GitHub, puis relance le déploiement.</p></div>'
+  );
+});
 
 /* =====================================================================
    14. DEMARRAGE
