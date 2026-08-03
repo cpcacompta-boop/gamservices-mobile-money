@@ -25,7 +25,8 @@ app.use(express.static(STATIC_DIR));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  // Neon exige le SSL (valeur par défaut). Pour une base locale sans SSL : DB_SSL=off
+  ssl: process.env.DB_SSL === 'off' ? false : { rejectUnauthorized: false }
 });
 
 /* =====================================================================
@@ -195,6 +196,16 @@ async function migrate() {
     ref_type TEXT,
     ref_id INTEGER,
     date_mouvement DATE DEFAULT CURRENT_DATE,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`);
+
+  // --- APPROVISIONNEMENTS UV (chargement du stock chez un réseau) ---
+  await q(`CREATE TABLE IF NOT EXISTS approvisionnements (
+    id SERIAL PRIMARY KEY,
+    reseau_id INTEGER REFERENCES reseaux(id),
+    montant NUMERIC NOT NULL,
+    date_appro DATE DEFAULT CURRENT_DATE,
+    note TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
 
@@ -724,6 +735,123 @@ app.get('/stats', wrap(async (req, res) => {
     alertes: Number(alertes.rows[0].count),
     total_du: Number(du.rows[0].total)
   });
+}));
+
+/* =====================================================================
+   APPROVISIONNEMENTS UV
+   ===================================================================== */
+app.post('/approvisionnements', wrap(async (req, res) => {
+  const { reseau_id, montant, date_appro, note } = req.body;
+  const r = await pool.query(
+    `INSERT INTO approvisionnements (reseau_id, montant, date_appro, note)
+     VALUES ($1,$2,$3,$4) RETURNING *`,
+    [reseau_id, montant, date_appro || null, note || null]);
+  res.json(r.rows[0]);
+}));
+
+app.get('/approvisionnements', wrap(async (req, res) => {
+  const r = await pool.query(`
+    SELECT a.*, rz.nom AS reseau_nom, rz.couleur AS reseau_couleur
+    FROM approvisionnements a
+    LEFT JOIN reseaux rz ON rz.id = a.reseau_id
+    ORDER BY a.date_appro DESC, a.created_at DESC`);
+  res.json(r.rows);
+}));
+
+app.delete('/approvisionnements/:id', wrap(async (req, res) => {
+  await pool.query('DELETE FROM approvisionnements WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* =====================================================================
+   COCKPIT : pilotage global
+   (trésorerie, stock UV par réseau, créances, commerciaux)
+   ===================================================================== */
+app.get('/cockpit', wrap(async (req, res) => {
+  const [glob, reseaux, commerciaux, debiteurs] = await Promise.all([
+    pool.query(`
+      SELECT
+        (SELECT COALESCE(SUM(montant),0) FROM approvisionnements) AS total_appro,
+        (SELECT COALESCE(SUM(montant_du),0) FROM operations WHERE type_operation='VENTE_UV') AS total_vendu,
+        (SELECT COALESCE(SUM(montant_du),0) FROM operations WHERE type_operation='RETOUR_UV') AS total_retour,
+        (SELECT COALESCE(SUM(montant),0) FROM versements) AS total_encaisse,
+        (SELECT COALESCE(SUM(GREATEST(o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0),0)),0) FROM operations o) AS total_creances,
+        (SELECT COUNT(*) FROM (
+            SELECT o.id FROM operations o
+            WHERE o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0) > 0
+        ) z) AS nb_impayes
+    `),
+    pool.query(`
+      SELECT rz.id, rz.nom, rz.couleur,
+        COALESCE(ap.appro,0)   AS approvisionne,
+        COALESCE(op.vendu,0)   AS vendu,
+        COALESCE(op.retour,0)  AS retour,
+        COALESCE(ap.appro,0) - COALESCE(op.vendu,0) + COALESCE(op.retour,0) AS stock,
+        COALESCE(vs.encaisse_uv,0) AS encaisse_uv,
+        COALESCE(cr.creances,0)    AS creances
+      FROM reseaux rz
+      LEFT JOIN (SELECT reseau_id, SUM(montant) AS appro FROM approvisionnements GROUP BY reseau_id) ap ON ap.reseau_id=rz.id
+      LEFT JOIN (SELECT reseau_id,
+          SUM(CASE WHEN type_operation='VENTE_UV'  THEN montant_du ELSE 0 END) AS vendu,
+          SUM(CASE WHEN type_operation='RETOUR_UV' THEN montant_du ELSE 0 END) AS retour
+          FROM operations GROUP BY reseau_id) op ON op.reseau_id=rz.id
+      LEFT JOIN (SELECT reseau_id, SUM(montant) AS encaisse_uv FROM versements WHERE mode='UV' GROUP BY reseau_id) vs ON vs.reseau_id=rz.id
+      LEFT JOIN (SELECT o.reseau_id, SUM(GREATEST(o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0),0)) AS creances FROM operations o GROUP BY o.reseau_id) cr ON cr.reseau_id=rz.id
+      ORDER BY rz.nom
+    `),
+    pool.query(`
+      SELECT c.id, c.nom, c.prenoms,
+        COALESCE(pz.nb_pdv,0)      AS nb_pdv,
+        COALESCE(tv.nb_tournees,0) AS nb_tournees,
+        COALESCE(tc.collecte,0)    AS collecte,
+        COALESCE(tv.reverse,0)     AS reverse,
+        COALESCE(tc.collecte,0) - COALESCE(tv.reverse,0) AS reste_a_reverser
+      FROM commerciaux c
+      LEFT JOIN (SELECT z.commercial_id, COUNT(p.id) AS nb_pdv FROM zones z LEFT JOIN pdv p ON p.zone_id=z.id GROUP BY z.commercial_id) pz ON pz.commercial_id=c.id
+      LEFT JOIN (SELECT commercial_id, COUNT(*) AS nb_tournees, SUM(montant_reverse) AS reverse FROM tournees GROUP BY commercial_id) tv ON tv.commercial_id=c.id
+      LEFT JOIN (SELECT t.commercial_id, SUM(l.remise_retour + l.espece_achat) AS collecte FROM tournees t JOIN tournee_lignes l ON l.tournee_id=t.id GROUP BY t.commercial_id) tc ON tc.commercial_id=c.id
+      ORDER BY reste_a_reverser DESC, c.nom
+    `),
+    pool.query(`
+      SELECT p.id, p.nom AS pdv_nom, z.nom AS zone_nom,
+        SUM(GREATEST(o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0),0)) AS dette
+      FROM operations o
+      JOIN pdv p ON p.id=o.pdv_id
+      LEFT JOIN zones z ON z.id=p.zone_id
+      GROUP BY p.id, p.nom, z.nom
+      HAVING SUM(GREATEST(o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0),0)) > 0
+      ORDER BY dette DESC
+      LIMIT 10
+    `)
+  ]);
+  res.json({
+    global: glob.rows[0],
+    reseaux: reseaux.rows,
+    commerciaux: commerciaux.rows,
+    debiteurs: debiteurs.rows
+  });
+}));
+
+/* =====================================================================
+   RECOUVREMENT : factures impayées par zone / commercial (terrain)
+   ===================================================================== */
+app.get('/recouvrement', wrap(async (req, res) => {
+  const rows = await pool.query(`
+    SELECT o.id, o.type_operation, o.montant_du, o.date_operation, o.date_limite_reglement,
+      o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0) AS montant_restant,
+      p.id AS pdv_id, p.nom AS pdv_nom, p.telephone AS pdv_tel,
+      z.id AS zone_id, z.nom AS zone_nom,
+      c.id AS commercial_id, c.nom AS commercial_nom, c.prenoms AS commercial_prenoms,
+      rz.nom AS reseau_nom, rz.couleur AS reseau_couleur
+    FROM operations o
+    JOIN pdv p ON p.id = o.pdv_id
+    LEFT JOIN zones z ON z.id = p.zone_id
+    LEFT JOIN commerciaux c ON c.id = z.commercial_id
+    LEFT JOIN reseaux rz ON rz.id = o.reseau_id
+    WHERE o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0) > 0
+    ORDER BY z.nom NULLS LAST, p.nom, o.date_operation
+  `);
+  res.json(rows.rows);
 }));
 
 /* =====================================================================
