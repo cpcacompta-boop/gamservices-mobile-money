@@ -241,30 +241,36 @@ const API = '';
 const RESEAUX_AGENCE_EXTRA = 'Transfert d\'unité';
 
 const NAV = [
-  {group:'Opérations', items:[
-    {id:'dashboard',   label:'Tableau de bord', idx:'00'},
-    {id:'operations',  label:'Opérations UV',   idx:'01'},
-    {id:'versements',  label:'Versements',       idx:'02'},
-    {id:'alertes',     label:'Alertes',          idx:'03'},
-    {id:'grandlivre',  label:'Grand livre +/−',  idx:'04'},
+  {group:'Pilotage', items:[
+    {id:'cockpit', label:'Cockpit'},
+    {id:'dashboard', label:'Tableau de bord'},
   ]},
-  {group:'Rapports', items:[
-    {id:'rapports',    label:'Écart de fonds',   idx:'05'},
-    {id:'tournees',    label:'Tournées commercial', idx:'06'},
-    {id:'agence',      label:'Ops. Agence (PDV)', idx:'07'},
+  {group:'Espace Master', items:[
+    {id:'operations', label:'Vente / Achat d\'UV'},
+    {id:'approvisionnement', label:'Approvisionnement UV'},
+  ]},
+  {group:'Espace Commercial', items:[
+    {id:'recouvrement', label:'Recouvrement'},
+    {id:'tournees', label:'Tournées'},
+  ]},
+  {group:'Suivi', items:[
+    {id:'alertes', label:'Impayés / Alertes'},
+    {id:'grandlivre', label:'Grand livre +/−'},
+    {id:'rapports', label:'Écart de fonds'},
+    {id:'agence', label:'Ops. Agence (PDV)'},
   ]},
   {group:'Répertoire', items:[
-    {id:'pdv',         label:'Points de vente',  idx:'08'},
-    {id:'zones',       label:'Zones',            idx:'09'},
-    {id:'commerciaux', label:'Commerciaux',      idx:'10'},
-    {id:'masters',     label:'Masters',          idx:'11'},
-    {id:'superviseurs',label:'Superviseurs',     idx:'12'},
+    {id:'pdv',         label:'Points de vente'},
+    {id:'zones',       label:'Zones'},
+    {id:'commerciaux', label:'Commerciaux'},
+    {id:'masters',     label:'Masters'},
+    {id:'superviseurs',label:'Superviseurs'},
   ]},
 ];
 const ALL_ITEMS = NAV.flatMap(g=>g.items);
 
-let S = { view:'dashboard', reseaux:[], masters:[], superviseurs:[], commerciaux:[], zones:[], pdv:[],
-          operations:[], alertes:[], mouvements:[], soldes:[], rapports:[], tournees:[], agence:[], stats:{} };
+let S = { view:'cockpit', reseaux:[], masters:[], superviseurs:[], commerciaux:[], zones:[], pdv:[],
+          operations:[], alertes:[], mouvements:[], soldes:[], rapports:[], tournees:[], agence:[], stats:{}, cockpit:{}, appros:[], recouvrement:[] };
 
 /* ---------- utils ---------- */
 const $ = (id)=>document.getElementById(id);
@@ -275,6 +281,7 @@ function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;
 function nomComplet(x){ return esc([x.nom, x.prenoms].filter(Boolean).join(' ')) || '—'; }
 function initiales(x){ const a=(x.nom||'?')[0]||'?'; const b=(x.prenoms||'')[0]||''; return (a+b).toUpperCase(); }
 function reseauChip(nom, couleur){ return `<span class="rzchip"><span class="rzdot" style="background:${couleur||'#999'}"></span>${esc(nom||'—')}</span>`; }
+function opLabel(t){ return t==='VENTE_UV' ? "Vente d'UV" : "Achat d'UV"; }
 
 async function api(path, opts){
   const res = await fetch(API + path, opts);
@@ -315,11 +322,17 @@ async function loadView(view){
     if(view==='rapports')   S.rapports   = await api('/rapports-ecart');
     if(view==='tournees')   S.tournees   = await api('/tournees');
     if(view==='agence')     S.agence     = await api('/agence-ops');
+    if(view==='cockpit')          S.cockpit = await api('/cockpit');
+    if(view==='approvisionnement')S.appros  = await api('/approvisionnements');
+    if(view==='recouvrement')     S.recouvrement = await api('/recouvrement');
   }catch(e){ /* la vue affichera son propre état */ }
 }
 
 /* ---------- navigation ---------- */
 const ICON = {
+  recouvrement:'<path d="M20 12V7H6a2 2 0 0 1 0-4h12v4"/><path d="M4 5v14a2 2 0 0 0 2 2h14v-4"/><circle cx="16" cy="14" r="2"/>',
+  cockpit:'<path d="M5.5 19a9 9 0 1 1 13 0"/><path d="M12 14l3.6-3.6"/><circle cx="12" cy="14" r="1.4"/>',
+  approvisionnement:'<path d="M12 3v6"/><path d="M9 6l3-3 3 3"/><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M4 14h16"/>',
   dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
   operations:'<path d="M17 4v16"/><path d="M13 8l4-4 4 4"/><path d="M7 20V4"/><path d="M3 16l4 4 4-4"/>',
   versements:'<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01"/><path d="M18 12h.01"/>',
@@ -356,6 +369,7 @@ async function setView(view){
 }
 function renderView(){
   const R = {
+    cockpit:renderCockpit, approvisionnement:renderApprovisionnement, recouvrement:renderRecouvrement,
     dashboard:renderDashboard, operations:renderOperations, versements:renderVersements,
     alertes:renderAlertes, grandlivre:renderGrandLivre, rapports:renderRapports,
     tournees:renderTournees, agence:renderAgence, pdv:renderPdv, zones:renderZones,
@@ -364,6 +378,100 @@ function renderView(){
   };
   $('view-root').innerHTML = R[S.view]();
   attachHandlers();
+}
+
+/* ================= COCKPIT (pilotage) ================= */
+function renderCockpit(){
+  const c=S.cockpit||{}; const g=c.global||{}; const rz=c.reseaux||[]; const co=c.commerciaux||[]; const db=c.debiteurs||[];
+  const stockTotal = rz.reduce((s,r)=>s+Number(r.stock||0),0);
+  return `
+    <div class="stat-row">
+      <div class="stat"><div class="lbl">UV en stock (tous réseaux)</div><div class="num">${fmt(stockTotal)}</div></div>
+      <div class="stat"><div class="lbl">Total encaissé</div><div class="num">${fmt(g.total_encaisse)}</div></div>
+      <div class="stat warn"><div class="lbl">On te doit (créances)</div><div class="num">${fmt(g.total_creances)}</div></div>
+      <div class="stat warn"><div class="lbl">Opérations impayées</div><div class="num">${g.nb_impayes??0}</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Stock d'UV par réseau</h2><button class="btn small" data-view="approvisionnement">+ Approvisionner</button></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Réseau</th><th class="num">Approvisionné</th><th class="num">Vendu</th><th class="num">Retour</th><th class="num">Stock dispo</th><th class="num">Créances</th></tr></thead>
+        <tbody>${rz.length? rz.map(r=>{
+          const stock=Number(r.stock||0);
+          const cls = stock<0?'signe minus':(stock>0?'signe plus':'');
+          return `<tr>
+            <td>${reseauChip(r.nom,r.couleur)}</td>
+            <td class="num">${fmt(r.approvisionne)}</td>
+            <td class="num">${fmt(r.vendu)}</td>
+            <td class="num">${fmt(r.retour)}</td>
+            <td class="num"><span class="${cls}">${fmt(stock)}</span></td>
+            <td class="num">${Number(r.creances)>0?`<span class="pill alerte">${fmt(r.creances)}</span>`:'—'}</td>
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="6">Aucun réseau configuré</td></tr>`}</tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Performance des commerciaux</h2><button class="btn small" data-view="tournees">Voir tournées</button></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Commercial</th><th class="num">PDV</th><th class="num">Tournées</th><th class="num">Collecté</th><th class="num">Reversé</th><th class="num">Reste à reverser</th></tr></thead>
+        <tbody>${co.length? co.map(x=>{
+          const reste=Number(x.reste_a_reverser||0);
+          return `<tr>
+            <td>${nomComplet(x)}</td>
+            <td class="num">${x.nb_pdv}</td>
+            <td class="num">${x.nb_tournees}</td>
+            <td class="num">${fmt(x.collecte)}</td>
+            <td class="num">${fmt(x.reverse)}</td>
+            <td class="num">${reste>0?`<span class="pill partiel">${fmt(reste)}</span>`:`<span class="pill solde">à jour</span>`}</td>
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="6">Aucun commercial enregistré</td></tr>`}</tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Qui te doit de l'argent (top créances)</h2><button class="btn small" data-view="alertes">Voir alertes</button></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Point de vente</th><th>Zone</th><th class="num">Doit</th></tr></thead>
+        <tbody>${db.length? db.map(d=>`<tr>
+            <td>${esc(d.pdv_nom)}</td>
+            <td>${esc(d.zone_nom||'—')}</td>
+            <td class="num"><span class="pill alerte">${fmt(d.dette)}</span></td>
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="3">Personne ne te doit d'argent 🎉</td></tr>`}</tbody>
+      </table></div>
+    </div>`;
+}
+
+/* ================= APPROVISIONNEMENT UV ================= */
+function renderApprovisionnement(){
+  const appros=S.appros||[];
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>Charger de l'UV (approvisionnement)</h2></div>
+      <form data-form="approvisionnement">
+        <div class="form-grid">
+          <div class="field"><label>Réseau</label>
+            <select name="reseau_id" required>${S.reseaux.map(r=>`<option value="${r.id}">${esc(r.nom)}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Montant d'UV chargé (FCFA)</label><input type="number" name="montant" min="1" required></div>
+          <div class="field"><label>Date</label><input type="date" name="date_appro"></div>
+          <div class="field span2"><label>Note (optionnel)</label><input type="text" name="note" placeholder="ex: recharge Wave du matin"></div>
+        </div>
+        <div class="msg" data-msg></div>
+        <div class="form-actions"><button class="btn" type="submit">Enregistrer l'approvisionnement</button></div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Historique des approvisionnements</h2></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Réseau</th><th class="num">Montant chargé</th><th>Note</th><th></th></tr></thead>
+        <tbody>${appros.length? appros.map(a=>`<tr>
+          <td>${fmtDate(a.date_appro)}</td>
+          <td>${reseauChip(a.reseau_nom,a.reseau_couleur)}</td>
+          <td class="num signe plus">${fmt(a.montant)}</td>
+          <td>${esc(a.note||'—')}</td>
+          <td><button class="icon-btn" data-del="/approvisionnements/${a.id}" title="Supprimer">🗑</button></td>
+        </tr>`).join('') : `<tr class="empty-row"><td colspan="5">Aucun approvisionnement enregistré pour l'instant</td></tr>`}</tbody>
+      </table></div>
+    </div>`;
 }
 
 /* ================= DASHBOARD ================= */
@@ -396,7 +504,7 @@ function tableOperations(ops){
   return `<table><thead><tr><th>PDV</th><th>Type</th><th>Réseau</th><th class="num">Dû</th><th class="num">Reste</th><th>Échéance</th><th>Statut</th></tr></thead>
     <tbody>${ops.map(o=>`<tr>
       <td>${esc(o.pdv_nom)}</td>
-      <td>${o.type_operation==='VENTE_UV'?'Vente UV':'Retour UV'}</td>
+      <td>${opLabel(o.type_operation)}</td>
       <td>${reseauChip(o.reseau_nom,o.reseau_couleur)}</td>
       <td class="num">${fmt(o.montant_du)}</td>
       <td class="num">${fmt(o.montant_restant)}</td>
@@ -415,21 +523,29 @@ function agentOptions(type){
 function renderOperations(){
   return `
     <div class="panel">
-      <div class="panel-head"><h2>Nouvelle opération UV</h2></div>
+      <div class="panel-head"><h2>Nouvelle opération (Master)</h2></div>
+      <div style="padding:14px 20px 0;color:var(--ink-soft);font-size:13px;">Le Master enregistre ici chaque <b>Vente d'UV</b> (il recharge le PDV) ou <b>Achat d'UV</b> (il rachète l'UV dans les mains du PDV). Ça crée une facture que le PDV doit régler en totalité.</div>
       <form data-form="operation">
         <div class="form-grid">
-          <div class="field"><label>Point de vente</label>
-            <select name="pdv_id" required>${S.pdv.map(p=>`<option value="${p.id}">${esc(p.nom)} — ${esc(p.zone_nom||'zone ?')}</option>`).join('')||'<option value="">Crée un PDV</option>'}</select></div>
-          <div class="field"><label>Type</label>
-            <select name="type_operation" required><option value="VENTE_UV">Vente d'UV</option><option value="RETOUR_UV">Retour d'UV</option></select></div>
+          <div class="field"><label>Point de vente servi</label>
+            <select name="pdv_id" data-pdv-select required>${S.pdv.map(p=>`<option value="${p.id}">${esc(p.nom)} — ${esc(p.zone_nom||'zone ?')}</option>`).join('')||'<option value="">Crée un PDV d\'abord</option>'}</select></div>
+          <div class="field span2" data-recouvreur-hint style="font-size:12.5px;color:var(--ink-soft);padding-top:2px;"></div>
+          <div class="field"><label>Type d'opération</label>
+            <select name="type_operation" required>
+              <option value="VENTE_UV">Vente d'UV — le Master recharge le PDV</option>
+              <option value="RETOUR_UV">Achat d'UV — le Master rachète l'UV du PDV</option>
+            </select></div>
           <div class="field"><label>Réseau</label>
             <select name="reseau_id" required>${S.reseaux.map(r=>`<option value="${r.id}">${esc(r.nom)}</option>`).join('')}</select></div>
-          <div class="field"><label>Montant dû (FCFA)</label><input type="number" name="montant_du" min="1" required></div>
-          <div class="field"><label>Initié par</label>
-            <select name="initiateur_type" data-initiateur required><option value="MASTER">Master</option><option value="COMMERCIAL">Commercial</option></select></div>
-          <div class="field"><label>Agent</label><select name="initiateur_id" data-agent required>${agentOptions('MASTER')}</select></div>
-          <div class="field"><label>Canal</label>
-            <select name="canal_deplacement"><option value="DIRECT_SIEGE">PDV vient au siège</option><option value="VIA_COMMERCIAL">Via commercial (éloigné)</option></select></div>
+          <div class="field"><label>Montant de la facture (FCFA)</label><input type="number" name="montant_du" min="1" required></div>
+          <div class="field"><label>Master (qui a servi le PDV)</label>
+            <input type="hidden" name="initiateur_type" value="MASTER">
+            <select name="initiateur_id" required>${S.masters.map(m=>`<option value="${m.id}">${nomComplet(m)}</option>`).join('')||'<option value="">Crée un Master d\'abord</option>'}</select></div>
+          <div class="field"><label>Le PDV est…</label>
+            <select name="canal_deplacement">
+              <option value="DIRECT_SIEGE">Proche — il paie au siège</option>
+              <option value="VIA_COMMERCIAL">Éloigné — le commercial ira encaisser</option>
+            </select></div>
           <div class="field"><label>Échéance de règlement</label><input type="date" name="date_limite_reglement"></div>
         </div>
         <div class="msg" data-msg></div>
@@ -437,6 +553,80 @@ function renderOperations(){
       </form>
     </div>
     <div class="panel"><div class="panel-head"><h2>Toutes les opérations</h2></div><div class="table-wrap">${tableOperations(S.operations)}</div></div>`;
+}
+
+/* ================= RECOUVREMENT (terrain / commercial) ================= */
+function renderRecouvrement(){
+  const rows=S.recouvrement||[];
+  const intro=`<div class="panel"><div class="panel-head"><h2>Recouvrement — à encaisser sur le terrain</h2></div>
+    <div style="padding:16px 20px;color:var(--ink-soft);font-size:13.5px;">Chaque commercial voit ici les PDV de <b>sa zone</b> qui n'ont pas encore payé. Va récupérer l'argent (espèces ou UV), puis clique <b>Encaisser</b> pour marquer le paiement.</div></div>`;
+  if(!rows.length) return intro+`<div class="panel"><table><tbody><tr class="empty-row"><td>Tout est payé, rien à recouvrer 🎉</td></tr></tbody></table></div>`;
+  const groups={};
+  rows.forEach(o=>{
+    const k=o.commercial_id||('zone-'+(o.zone_id||'0'));
+    if(!groups[k]) groups[k]={ com:o.commercial_id?nomComplet({nom:o.commercial_nom,prenoms:o.commercial_prenoms}):'Sans commercial', zone:o.zone_nom, total:0, ops:[] };
+    groups[k].total+=Number(o.montant_restant); groups[k].ops.push(o);
+  });
+  return intro+Object.keys(groups).map(k=>{
+    const g=groups[k];
+    return `<div class="panel">
+      <div class="panel-head">
+        <h2>${esc(g.com)}${g.zone?` — ${esc(g.zone)}`:''}</h2>
+        <span class="pill alerte">À recouvrer : ${fmt(g.total)}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Point de vente</th><th>Réseau</th><th>Type</th><th class="num">Reste à payer</th><th>Échéance</th><th></th></tr></thead>
+        <tbody>${g.ops.map(o=>`<tr>
+          <td>${esc(o.pdv_nom)}</td>
+          <td>${reseauChip(o.reseau_nom,o.reseau_couleur)}</td>
+          <td>${opLabel(o.type_operation)}</td>
+          <td class="num">${fmt(o.montant_restant)}</td>
+          <td>${fmtDate(o.date_limite_reglement)}</td>
+          <td><button class="btn small" data-encaisser="${o.id}" data-reste="${o.montant_restant}" data-com="${o.commercial_id||''}" data-pdv="${esc(o.pdv_nom)}">Encaisser</button></td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>`;
+  }).join('');
+}
+
+function openEncaisser(ds){
+  const reste=Number(ds.reste);
+  openModal('Encaisser — '+ds.pdv, `
+    <div class="dl" style="margin-bottom:16px;">
+      <dt>Point de vente</dt><dd>${esc(ds.pdv)}</dd>
+      <dt>Reste à payer</dt><dd><b>${fmt(reste)}</b></dd>
+    </div>
+    <form id="form-encaisser">
+      <div class="form-grid" style="padding:0;">
+        <div class="field"><label>Mode de paiement</label>
+          <select id="enc-mode"><option value="CASH">Espèces (Cash)</option><option value="UV">UV (réseau)</option></select></div>
+        <div class="field" id="enc-wrap-reseau" style="display:none"><label>Réseau UV</label>
+          <select id="enc-reseau">${S.reseaux.map(r=>`<option value="${r.id}">${esc(r.nom)}</option>`).join('')}</select></div>
+        <div class="field"><label>Montant reçu (FCFA)</label><input type="number" id="enc-montant" min="1" value="${reste}"></div>
+        <div class="field span2"><label>Note (optionnel)</label><input type="text" id="enc-note" placeholder="ex: reçu en espèces par le commercial"></div>
+      </div>
+      <div class="msg" id="enc-msg"></div>
+      <div class="form-actions" style="padding-left:0;">
+        <button class="btn" type="submit">Valider le paiement</button>
+        <button class="btn ghost" type="button" id="enc-cancel">Annuler</button>
+      </div>
+    </form>`);
+  const mode=$('enc-mode'), wrap=$('enc-wrap-reseau');
+  const tg=()=>wrap.style.display=mode.value==='UV'?'flex':'none'; tg();
+  mode.addEventListener('change',tg);
+  $('enc-cancel').addEventListener('click',closeModal);
+  $('form-encaisser').addEventListener('submit', async e=>{
+    e.preventDefault();
+    const msg=$('enc-msg'); msg.textContent='Enregistrement…'; msg.className='msg';
+    try{
+      const payload={ operation_id:ds.encaisser, mode:mode.value, montant:$('enc-montant').value,
+        reseau_id: mode.value==='UV'?$('enc-reseau').value:null,
+        saisi_par_type: ds.com?'COMMERCIAL':null, saisi_par_id: ds.com||null, note:$('enc-note').value||null };
+      await api('/versements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      closeModal();
+      await loadAll(); await loadView(S.view); renderNav(); renderView();
+    }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
+  });
 }
 
 /* ================= VERSEMENTS ================= */
@@ -470,7 +660,7 @@ function tableAlertes(rows){
     <tbody>${rows.map(a=>`<tr>
       <td>${esc(a.pdv_nom)}</td>
       <td>${reseauChip(a.reseau_nom,a.reseau_couleur)}</td>
-      <td>${a.type_operation==='VENTE_UV'?'Vente UV':'Retour UV'}</td>
+      <td>${opLabel(a.type_operation)}</td>
       <td class="num">${fmt(a.montant_du)}</td>
       <td class="num">${fmt(a.montant_verse)}</td>
       <td class="num"><span class="pill alerte">${fmt(a.montant_restant)}</span></td>
@@ -789,6 +979,21 @@ function attachHandlers(){
   const modeSel=document.querySelector('select[data-mode]');
   if(modeSel){ const wrap=document.querySelector('[data-wrap-reseau]'); const tg=()=>wrap.style.display=modeSel.value==='UV'?'flex':'none'; tg(); modeSel.addEventListener('change',tg); }
 
+  // opération Master : montre quel commercial ira recouvrer selon le PDV choisi
+  const pdvSel=document.querySelector('select[data-pdv-select]');
+  const recHint=document.querySelector('[data-recouvreur-hint]');
+  if(pdvSel && recHint){
+    const upd=()=>{
+      const p=S.pdv.find(x=>String(x.id)===String(pdvSel.value));
+      if(!p){ recHint.innerHTML=''; return; }
+      const z=S.zones.find(zz=>String(zz.id)===String(p.zone_id));
+      recHint.innerHTML = (z && z.commercial_nom)
+        ? `↳ Recouvrement assuré par <b>${esc(z.commercial_nom)}</b> — zone ${esc(z.nom)}`
+        : `↳ Ce PDV n'a pas encore de commercial de zone rattaché`;
+    };
+    upd(); pdvSel.addEventListener('change',upd);
+  }
+
   // lignes dynamiques : tournée
   const trows=document.querySelector('[data-rows="tournee"]');
   if(trows){ addTourneeRow(); document.querySelector('[data-addrow="tournee"]').addEventListener('click',addTourneeRow); }
@@ -804,6 +1009,7 @@ function attachHandlers(){
 
   // détails
   document.querySelectorAll('[data-detail]').forEach(b=>b.addEventListener('click',()=>openDetail(b.dataset.detail)));
+  document.querySelectorAll('[data-encaisser]').forEach(b=>b.addEventListener('click',()=>openEncaisser(b.dataset)));
   document.querySelectorAll('[data-detail-tournee]').forEach(b=>b.addEventListener('click',()=>openTourneeDetail(b.dataset.detailTournee)));
   document.querySelectorAll('[data-detail-agence]').forEach(b=>b.addEventListener('click',()=>openAgenceDetail(b.dataset.detailAgence)));
 }
@@ -858,7 +1064,7 @@ async function handleSubmit(e){
   }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
 }
 
-const ENDPOINTS={ operation:'/operations', versement:'/versements', mouvement:'/mouvements',
+const ENDPOINTS={ operation:'/operations', approvisionnement:'/approvisionnements', versement:'/versements', mouvement:'/mouvements',
   rapport:'/rapports-ecart', tournee:'/tournees', agence:'/agence-ops',
   pdv:'/pdv', zone:'/zones', commerciaux:'/commerciaux', masters:'/masters', superviseurs:'/superviseurs' };
 
@@ -959,7 +1165,7 @@ async function init(){
     renderNav(); return;
   }
   renderNav();
-  await loadView('dashboard');
+  await loadView(S.view);
   renderView();
 }
 init();
