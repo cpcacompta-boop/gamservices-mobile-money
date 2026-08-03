@@ -9,6 +9,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { Pool } = require('pg');
 const cors = require('cors');
 require('dotenv').config();
@@ -209,7 +210,24 @@ async function migrate() {
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
 
+  // --- COMPTES UTILISATEURS + SESSIONS (connexion) ---
+  await q(`CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    pass_hash TEXT NOT NULL,
+    role TEXT NOT NULL,                 -- SUPERVISEUR | MASTER | COMMERCIAL | PDV
+    linked_id INTEGER,                  -- id du master/commercial/pdv associé
+    actif BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`);
+  await q(`CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`);
+
   await seedReseaux();
+  await seedSuperviseur();
   console.log('✔ Migration terminée : base à jour.');
 }
 
@@ -243,6 +261,17 @@ async function seedReseaux() {
   }
 }
 
+// Compte Superviseur par défaut : Superviseur / Admin@123
+async function seedSuperviseur() {
+  const r = await pool.query("SELECT id FROM users WHERE username=$1", ['Superviseur']);
+  if (r.rows.length === 0) {
+    await pool.query(
+      "INSERT INTO users (username, pass_hash, role) VALUES ($1,$2,'SUPERVISEUR')",
+      ['Superviseur', hashPass('Admin@123')]);
+    console.log('✔ Compte Superviseur créé (identifiant: Superviseur / mot de passe: Admin@123)');
+  }
+}
+
 /* =====================================================================
    2. HELPERS
    ===================================================================== */
@@ -251,6 +280,42 @@ const wrap = (fn) => (req, res) => fn(req, res).catch(err => {
   console.error(err);
   res.status(400).json({ error: err.message });
 });
+
+/* ---- Mot de passe (scrypt, sans dépendance externe) ---- */
+function hashPass(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const h = crypto.scryptSync(String(pw), salt, 64).toString('hex');
+  return salt + ':' + h;
+}
+function verifyPass(pw, stored) {
+  try {
+    const [salt, h] = String(stored).split(':');
+    const hh = crypto.scryptSync(String(pw), salt, 64).toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(hh, 'hex'));
+  } catch (e) { return false; }
+}
+function getToken(req) {
+  const h = req.headers['authorization'] || '';
+  return h.startsWith('Bearer ') ? h.slice(7) : (req.headers['x-auth-token'] || '');
+}
+// Middleware : exige une session valide
+async function requireAuth(req, res, next) {
+  try {
+    const token = getToken(req);
+    if (!token) return res.status(401).json({ error: 'Non authentifié' });
+    const r = await pool.query(
+      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+       WHERE s.token = $1 AND u.actif = TRUE`, [token]);
+    if (r.rows.length === 0) return res.status(401).json({ error: 'Session expirée, reconnecte-toi' });
+    req.user = r.rows[0];
+    next();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+}
+// Middleware : exige un rôle précis
+function requireRole(...roles) {
+  return (req, res, next) => roles.includes(req.user.role)
+    ? next() : res.status(403).json({ error: 'Accès réservé au superviseur' });
+}
 
 // Colonnes "lourdes" (images) à exclure des listes
 const HEAVY = {
@@ -271,6 +336,94 @@ function lightCols(table) {
 app.get('/health', wrap(async (req, res) => {
   await pool.query('SELECT 1');
   res.json({ status: 'ok', database: 'connectée' });
+}));
+
+/* =====================================================================
+   AUTHENTIFICATION (login public, puis tout est protégé)
+   ===================================================================== */
+app.post('/login', wrap(async (req, res) => {
+  const { username, password } = req.body;
+  const r = await pool.query('SELECT * FROM users WHERE username=$1 AND actif=TRUE', [username]);
+  if (r.rows.length === 0 || !verifyPass(password, r.rows[0].pass_hash))
+    return res.status(401).json({ error: 'Identifiant ou mot de passe incorrect' });
+  const u = r.rows[0];
+  const token = crypto.randomBytes(24).toString('hex');
+  await pool.query('INSERT INTO sessions (token, user_id) VALUES ($1,$2)', [token, u.id]);
+  res.json({ token, user: { id: u.id, username: u.username, role: u.role, linked_id: u.linked_id } });
+}));
+
+// À partir d'ici, tout exige une connexion
+app.use(requireAuth);
+
+app.get('/me', wrap(async (req, res) => {
+  const u = req.user;
+  let linked_nom = null;
+  if (u.linked_id) {
+    const t = u.role === 'MASTER' ? 'masters' : u.role === 'COMMERCIAL' ? 'commerciaux' : u.role === 'PDV' ? 'pdv' : null;
+    if (t) { const q = await pool.query(`SELECT nom FROM ${t} WHERE id=$1`, [u.linked_id]); linked_nom = q.rows[0] && q.rows[0].nom; }
+  }
+  res.json({ id: u.id, username: u.username, role: u.role, linked_id: u.linked_id, linked_nom });
+}));
+
+app.post('/logout', wrap(async (req, res) => {
+  const token = getToken(req);
+  if (token) await pool.query('DELETE FROM sessions WHERE token=$1', [token]);
+  res.json({ ok: true });
+}));
+
+/* ---- Gestion des comptes (SUPERVISEUR uniquement) ---- */
+app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(`
+    SELECT u.id, u.username, u.role, u.linked_id, u.actif, u.created_at,
+      CASE u.role
+        WHEN 'MASTER' THEN (SELECT nom FROM masters WHERE id=u.linked_id)
+        WHEN 'COMMERCIAL' THEN (SELECT nom FROM commerciaux WHERE id=u.linked_id)
+        WHEN 'PDV' THEN (SELECT nom FROM pdv WHERE id=u.linked_id)
+      END AS linked_nom
+    FROM users u ORDER BY u.role, u.username`);
+  res.json(r.rows);
+}));
+
+app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const { username, password, role, linked_id } = req.body;
+  if (!username || !password || !role) return res.status(400).json({ error: 'Identifiant, mot de passe et rôle sont obligatoires' });
+  if (!['SUPERVISEUR', 'MASTER', 'COMMERCIAL', 'PDV'].includes(role)) return res.status(400).json({ error: 'Rôle invalide' });
+  const exists = await pool.query('SELECT 1 FROM users WHERE username=$1', [username]);
+  if (exists.rows.length) return res.status(400).json({ error: 'Cet identifiant existe déjà' });
+  const r = await pool.query(
+    'INSERT INTO users (username, pass_hash, role, linked_id) VALUES ($1,$2,$3,$4) RETURNING id, username, role, linked_id, actif',
+    [username, hashPass(password), role, linked_id || null]);
+  res.json(r.rows[0]);
+}));
+
+app.post('/users/:id/password', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  if (!req.body.password) return res.status(400).json({ error: 'Nouveau mot de passe requis' });
+  await pool.query('UPDATE users SET pass_hash=$1 WHERE id=$2', [hashPass(req.body.password), req.params.id]);
+  await pool.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+app.delete('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const target = await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id]);
+  if (target.rows[0] && target.rows[0].role === 'SUPERVISEUR') {
+    const cnt = await pool.query("SELECT COUNT(*) c FROM users WHERE role='SUPERVISEUR' AND actif=TRUE");
+    if (Number(cnt.rows[0].c) <= 1) return res.status(400).json({ error: 'Impossible de supprimer le dernier superviseur' });
+  }
+  await pool.query('DELETE FROM users WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+// Situation d'un PDV connecté (ses opérations)
+app.get('/mes-operations', wrap(async (req, res) => {
+  const pdvId = req.user.role === 'PDV' ? req.user.linked_id : req.query.pdv_id;
+  if (!pdvId) return res.json([]);
+  const r = await pool.query(`
+    SELECT o.id, o.type_operation, o.montant_du, o.date_operation, o.date_limite_reglement,
+      o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0) AS montant_restant,
+      rz.nom AS reseau_nom, rz.couleur AS reseau_couleur
+    FROM operations o LEFT JOIN reseaux rz ON rz.id=o.reseau_id
+    WHERE o.pdv_id=$1 ORDER BY o.date_operation DESC`, [pdvId]);
+  res.json(r.rows);
 }));
 
 app.get('/reseaux', wrap(async (req, res) => {
@@ -849,8 +1002,9 @@ app.get('/recouvrement', wrap(async (req, res) => {
     LEFT JOIN commerciaux c ON c.id = z.commercial_id
     LEFT JOIN reseaux rz ON rz.id = o.reseau_id
     WHERE o.montant_du - COALESCE((SELECT SUM(montant) FROM versements v WHERE v.operation_id=o.id),0) > 0
+      AND ($1::int IS NULL OR z.commercial_id = $1)
     ORDER BY z.nom NULLS LAST, p.nom, o.date_operation
-  `);
+  `, [req.user.role === 'COMMERCIAL' ? req.user.linked_id : null]);
   res.json(rows.rows);
 }));
 
