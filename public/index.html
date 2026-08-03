@@ -20,6 +20,8 @@
     --brand-deep-2:#162143;
     --red:#B5322A;
     --red-soft:#FCE9E7;
+    --gold:#C89B3C;
+    --gold-soft:#F6EDD4;
     --line:#E5EAF3;
     --line-2:#EEF2F9;
     --pos:#12855A;
@@ -47,7 +49,7 @@
     color:#fff;display:flex;flex-direction:column;padding:22px 0 26px;
     position:sticky;top:0;height:100vh;
   }
-  .brand{padding:0 20px 18px;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,.10);}
+  .brand{padding:0 20px 18px;margin-bottom:8px;border-bottom:1px solid rgba(200,155,60,.35);}
   .logo-card{background:#fff;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px rgba(0,0,0,.20);}
   .brand .logo-desktop{width:100%;max-width:184px;display:block;}
   .brand .logo-mobile{display:none;}
@@ -64,7 +66,7 @@
   nav button .ico{width:18px;height:18px;flex-shrink:0;opacity:.82;}
   nav button:hover{background:rgba(255,255,255,.09);color:#fff;}
   nav button.active{background:#fff;color:var(--brand);font-weight:600;box-shadow:0 5px 14px rgba(0,0,0,.16);}
-  nav button.active .ico{opacity:1;}
+  nav button.active .ico{opacity:1;color:var(--gold);}
   .badge-alert{background:var(--red);color:#fff;font-family:var(--mono);font-size:10px;font-weight:600;padding:1px 7px;border-radius:20px;}
 
   /* ---- MAIN ---- */
@@ -215,7 +217,7 @@
 
   /* côté marque */
   .login-brand{flex:1;position:relative;overflow:hidden;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;padding:48px;background:linear-gradient(135deg,#1B2A57 0%,#16224A 45%,#1E2E5C 100%);}
-  .login-brand::before{content:"";position:absolute;width:150%;height:150%;top:-25%;left:-25%;background:radial-gradient(circle at 30% 30%,rgba(58,98,190,.45),transparent 45%),radial-gradient(circle at 75% 70%,rgba(181,50,42,.28),transparent 45%);animation:auroraMove 14s ease-in-out infinite alternate;}
+  .login-brand::before{content:"";position:absolute;width:150%;height:150%;top:-25%;left:-25%;background:radial-gradient(circle at 30% 30%,rgba(58,98,190,.45),transparent 45%),radial-gradient(circle at 75% 70%,rgba(181,50,42,.28),transparent 45%),radial-gradient(circle at 50% 96%,rgba(200,155,60,.22),transparent 42%);animation:auroraMove 14s ease-in-out infinite alternate;}
   @keyframes auroraMove{from{transform:translate(-4%,-3%) scale(1);}to{transform:translate(4%,3%) scale(1.12);}}
   .login-brand::after{content:"";position:absolute;top:0;left:-60%;width:45%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.10),transparent);transform:skewX(-18deg);animation:shineSweep 7.5s ease-in-out infinite;z-index:1;pointer-events:none;}
   @keyframes shineSweep{0%,55%{left:-60%;}100%{left:135%;}}
@@ -224,7 +226,7 @@
   .login-dots span{position:absolute;border-radius:50%;opacity:.55;filter:blur(.4px);animation:floatDot 9s ease-in-out infinite;}
   @keyframes floatDot{0%,100%{transform:translateY(0);}50%{transform:translateY(-16px);}}
   .brand-inner{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:24px;}
-  .login-brand .card{position:relative;background:#fff;border-radius:20px;padding:28px 40px;box-shadow:0 22px 60px rgba(0,0,0,.38);animation:floatCard 6s ease-in-out infinite;}
+  .login-brand .card{position:relative;background:#fff;border:1px solid rgba(200,155,60,.30);border-radius:20px;padding:28px 40px;box-shadow:0 22px 60px rgba(0,0,0,.38);animation:floatCard 6s ease-in-out infinite;}
   .login-brand .card::before{content:"";position:absolute;inset:-12px;border-radius:28px;background:radial-gradient(closest-side,rgba(58,98,190,.6),rgba(27,169,224,.25),transparent);filter:blur(16px);z-index:-1;animation:glowPulse 4.2s ease-in-out infinite;}
   @keyframes floatCard{0%,100%{transform:translateY(0);}50%{transform:translateY(-9px);}}
   @keyframes glowPulse{0%,100%{opacity:.45;transform:scale(1);}50%{opacity:.9;transform:scale(1.07);}}
@@ -232,11 +234,12 @@
   @keyframes popIn{from{opacity:0;transform:translateY(14px) scale(.94);}to{opacity:1;transform:none;}}
   .login-brand h2{font-family:var(--display);font-weight:600;font-size:23px;margin:0;text-align:center;}
   .login-brand p{color:rgba(255,255,255,.75);font-size:13.5px;margin:0;text-align:center;max-width:340px;line-height:1.55;}
+  .lg-divider{width:58px;height:3px;background:var(--gold);border-radius:2px;box-shadow:0 0 12px rgba(200,155,60,.55);}
   .login-features{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:370px;}
-  .login-features span{font-size:11.5px;font-weight:600;color:#fff;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);padding:5px 11px;border-radius:20px;}
+  .login-features span{font-size:11.5px;font-weight:600;color:#fff;background:rgba(255,255,255,.10);border:1px solid rgba(200,155,60,.38);padding:5px 11px;border-radius:20px;}
 
   /* côté formulaire */
-  .login-form-side{width:min(470px,100%);display:flex;align-items:center;justify-content:center;padding:36px;background:var(--surface);}
+  .login-form-side{flex:1;display:flex;align-items:center;justify-content:center;padding:36px;background:var(--surface);}
   .login-box{width:100%;max-width:362px;}
   .login-logo-m{display:none;}
   .login-box .mark{width:46px;height:46px;border-radius:13px;background:linear-gradient(135deg,var(--brand),var(--brand-2));display:flex;align-items:center;justify-content:center;margin-bottom:18px;box-shadow:0 8px 20px rgba(42,79,160,.3);}
@@ -282,6 +285,7 @@
       <div class="brand-inner">
         <div class="card"><img id="login-logo" data-loginlogo alt="GAMServices Holding"></div>
         <h2>Console Mobile Money</h2>
+        <div class="lg-divider"></div>
         <p>Ventes et achats d'UV, recouvrements par zone et pilotage en temps réel — GAMServices Holding.</p>
         <div class="login-features"><span>Vente &amp; Achat d'UV</span><span>Recouvrement par zone</span><span>Pilotage temps réel</span></div>
       </div>
@@ -1383,7 +1387,6 @@ function setupLogin(){
       const r=await fetch(API+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('login-user').value,password:$('login-pass').value})});
       const d=await r.json();
       if(!r.ok) throw new Error(d.error||'Échec de connexion');
-      try{ localStorage.setItem('gam_token', d.token); }catch(e){}
       S.auth={token:d.token, user:d.user};
       await startApp();
     }catch(err){ msg.textContent=err.message; btn.disabled=false; btn.textContent='Se connecter'; }
@@ -1410,12 +1413,7 @@ async function startApp(){
 async function init(){
   $('today').textContent=new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
   setupLogin();
-  let token=null; try{ token=localStorage.getItem('gam_token'); }catch(e){}
-  if(token){
-    S.auth={token};
-    try{ const me=await api('/me'); S.auth={token, user:me}; await startApp(); return; }
-    catch(e){ try{ localStorage.removeItem('gam_token'); }catch(e2){} S.auth=null; }
-  }
+  // La page de connexion est toujours la première affichée, même après une actualisation.
   showLogin();
 }
 init();
