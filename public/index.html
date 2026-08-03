@@ -210,49 +210,100 @@
   @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
 
   /* ---- LOGIN ---- */
-  #login-screen{position:fixed;inset:0;display:none;background:var(--bg);z-index:100;}
+  #login-screen{position:fixed;inset:0;display:none;z-index:100;overflow:hidden;background:var(--bg);}
   .login-wrap{display:flex;width:100%;height:100%;}
-  .login-brand{flex:1;background:linear-gradient(155deg,var(--brand-deep-1),var(--brand-deep-2));color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:40px;}
-  .login-brand .card{background:#fff;border-radius:16px;padding:22px 28px;box-shadow:0 12px 40px rgba(0,0,0,.25);}
-  .login-brand .card img{width:230px;display:block;}
-  .login-brand h2{font-family:var(--display);font-weight:600;font-size:22px;margin:0;text-align:center;}
-  .login-brand p{color:rgba(255,255,255,.72);font-size:13.5px;margin:0;text-align:center;max-width:330px;line-height:1.5;}
-  .login-form-side{width:min(460px,100%);display:flex;align-items:center;justify-content:center;padding:32px;}
-  .login-box{width:100%;max-width:360px;}
-  .login-box h1{font-family:var(--display);font-size:25px;font-weight:600;margin:0 0 6px;}
+
+  /* côté marque */
+  .login-brand{flex:1;position:relative;overflow:hidden;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;padding:48px;background:linear-gradient(135deg,#1B2A57 0%,#16224A 45%,#1E2E5C 100%);}
+  .login-brand::before{content:"";position:absolute;width:150%;height:150%;top:-25%;left:-25%;background:radial-gradient(circle at 30% 30%,rgba(58,98,190,.45),transparent 45%),radial-gradient(circle at 75% 70%,rgba(181,50,42,.28),transparent 45%);animation:auroraMove 14s ease-in-out infinite alternate;}
+  @keyframes auroraMove{from{transform:translate(-4%,-3%) scale(1);}to{transform:translate(4%,3%) scale(1.12);}}
+  .login-brand::after{content:"";position:absolute;top:0;left:-60%;width:45%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.10),transparent);transform:skewX(-18deg);animation:shineSweep 7.5s ease-in-out infinite;z-index:1;pointer-events:none;}
+  @keyframes shineSweep{0%,55%{left:-60%;}100%{left:135%;}}
+  @media (prefers-reduced-motion:reduce){ .login-brand::before,.login-brand::after,.login-brand .card,.login-brand .card::before,.login-dots span{animation:none!important;} }
+  .login-dots{position:absolute;inset:0;overflow:hidden;pointer-events:none;}
+  .login-dots span{position:absolute;border-radius:50%;opacity:.55;filter:blur(.4px);animation:floatDot 9s ease-in-out infinite;}
+  @keyframes floatDot{0%,100%{transform:translateY(0);}50%{transform:translateY(-16px);}}
+  .brand-inner{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:24px;}
+  .login-brand .card{position:relative;background:#fff;border-radius:20px;padding:28px 40px;box-shadow:0 22px 60px rgba(0,0,0,.38);animation:floatCard 6s ease-in-out infinite;}
+  .login-brand .card::before{content:"";position:absolute;inset:-12px;border-radius:28px;background:radial-gradient(closest-side,rgba(58,98,190,.6),rgba(27,169,224,.25),transparent);filter:blur(16px);z-index:-1;animation:glowPulse 4.2s ease-in-out infinite;}
+  @keyframes floatCard{0%,100%{transform:translateY(0);}50%{transform:translateY(-9px);}}
+  @keyframes glowPulse{0%,100%{opacity:.45;transform:scale(1);}50%{opacity:.9;transform:scale(1.07);}}
+  .login-brand .card img{width:270px;max-width:60vw;display:block;}
+  @keyframes popIn{from{opacity:0;transform:translateY(14px) scale(.94);}to{opacity:1;transform:none;}}
+  .login-brand h2{font-family:var(--display);font-weight:600;font-size:23px;margin:0;text-align:center;}
+  .login-brand p{color:rgba(255,255,255,.75);font-size:13.5px;margin:0;text-align:center;max-width:340px;line-height:1.55;}
+  .login-features{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:370px;}
+  .login-features span{font-size:11.5px;font-weight:600;color:#fff;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);padding:5px 11px;border-radius:20px;}
+
+  /* côté formulaire */
+  .login-form-side{width:min(470px,100%);display:flex;align-items:center;justify-content:center;padding:36px;background:var(--surface);}
+  .login-box{width:100%;max-width:362px;}
+  .login-logo-m{display:none;}
+  .login-box .mark{width:46px;height:46px;border-radius:13px;background:linear-gradient(135deg,var(--brand),var(--brand-2));display:flex;align-items:center;justify-content:center;margin-bottom:18px;box-shadow:0 8px 20px rgba(42,79,160,.3);}
+  .login-box .mark svg{width:24px;height:24px;stroke:#fff;fill:none;}
+  .login-box h1{font-family:var(--display);font-size:26px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em;}
   .login-box .sub{color:var(--ink-soft);font-size:13.5px;margin-bottom:26px;}
   .login-box label{font-size:12px;font-weight:600;color:var(--ink-soft);display:block;margin-bottom:6px;}
   .login-box .fld{margin-bottom:16px;position:relative;}
-  .login-box input{width:100%;font-family:var(--body);font-size:15px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);}
+  .login-box .fld .ficon{position:absolute;left:13px;top:34px;width:17px;height:17px;stroke:var(--ink-faint);fill:none;pointer-events:none;}
+  .login-box input{width:100%;font-family:var(--body);font-size:15px;padding:12px 14px 12px 40px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--ink);transition:border .15s,box-shadow .15s;}
   .login-box input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(42,79,160,.14);}
-  .login-box .eye{position:absolute;right:8px;top:29px;cursor:pointer;background:none;border:none;font-size:16px;padding:4px 8px;}
-  .login-box button.go{width:100%;padding:13px;border:none;border-radius:10px;background:var(--brand);color:#fff;font-family:var(--body);font-weight:600;font-size:15px;cursor:pointer;margin-top:6px;transition:background .15s;}
-  .login-box button.go:hover{background:var(--brand-2);}
-  .login-box button.go:disabled{opacity:.6;cursor:default;}
+  .login-box .eye{position:absolute;right:8px;top:29px;cursor:pointer;background:none;border:none;font-size:16px;padding:5px 8px;border-radius:8px;}
+  .login-box .eye:hover{background:var(--surface-2);}
+  .login-box button.go{width:100%;padding:13px;border:none;border-radius:11px;background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;font-family:var(--body);font-weight:600;font-size:15px;cursor:pointer;margin-top:8px;transition:transform .15s,box-shadow .15s,opacity .15s;box-shadow:0 8px 20px rgba(42,79,160,.28);}
+  .login-box button.go:hover{transform:translateY(-1px);box-shadow:0 12px 26px rgba(42,79,160,.36);}
+  .login-box button.go:active{transform:translateY(0);}
+  .login-box button.go:disabled{opacity:.75;cursor:default;transform:none;box-shadow:none;}
+  .login-box button.go .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;vertical-align:-2px;margin-right:8px;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
   .login-msg{color:var(--red);font-size:13px;font-weight:500;min-height:18px;margin-top:12px;}
+  .login-foot{margin-top:26px;font-size:11.5px;color:var(--ink-faint);text-align:center;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
+
   .topbar-right{display:flex;align-items:center;gap:14px;}
   .user-badge{font-size:12.5px;font-weight:600;color:var(--brand);background:var(--surface-2);border:1px solid var(--line);padding:5px 11px;border-radius:20px;white-space:nowrap;}
-  @media (max-width:820px){ .login-brand{display:none;} .login-form-side{width:100%;} .user-badge{display:none;} }
+  @media (max-width:820px){ .login-brand{display:none;} .login-form-side{width:100%;} .user-badge{display:none;} .login-logo-m{display:block;width:150px;margin:0 auto 22px;} }
+  @media (prefers-reduced-motion:reduce){ .login-brand::before,.login-dots span,.login-brand .card,.login-brand h2,.login-brand p,.login-features,.login-box{animation:none!important;} }
 </style>
 </head>
 <body>
 <div id="login-screen">
   <div class="login-wrap">
     <div class="login-brand">
-      <div class="card"><img id="login-logo" alt="GAMServices Holding"></div>
-      <h2>Console Mobile Money</h2>
-      <p>Gestion des ventes et achats d'UV, recouvrements et pilotage — GAMServices Holding.</p>
+      <div class="login-dots">
+        <span style="width:14px;height:14px;background:#1BA9E0;top:14%;left:12%;animation-delay:0s"></span>
+        <span style="width:10px;height:10px;background:#FF6A00;top:24%;left:80%;animation-delay:1.2s"></span>
+        <span style="width:16px;height:16px;background:#F5B700;top:70%;left:16%;animation-delay:.6s"></span>
+        <span style="width:9px;height:9px;background:#2E7D5B;top:82%;left:72%;animation-delay:2s"></span>
+        <span style="width:12px;height:12px;background:#7A5CC0;top:44%;left:88%;animation-delay:1.6s"></span>
+        <span style="width:8px;height:8px;background:#B5322A;top:58%;left:7%;animation-delay:.3s"></span>
+        <span style="width:11px;height:11px;background:#0072BC;top:10%;left:62%;animation-delay:2.4s"></span>
+      </div>
+      <div class="brand-inner">
+        <div class="card"><img id="login-logo" data-loginlogo alt="GAMServices Holding"></div>
+        <h2>Console Mobile Money</h2>
+        <p>Ventes et achats d'UV, recouvrements par zone et pilotage en temps réel — GAMServices Holding.</p>
+        <div class="login-features"><span>Vente &amp; Achat d'UV</span><span>Recouvrement par zone</span><span>Pilotage temps réel</span></div>
+      </div>
     </div>
     <div class="login-form-side">
       <div class="login-box">
+        <img class="login-logo-m" data-loginlogo alt="GAMServices Holding">
+        <div class="mark"><svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
         <h1>Connexion</h1>
-        <div class="sub">Entre ton identifiant et ton mot de passe.</div>
+        <div class="sub">Bienvenue &#128075; Entre tes identifiants pour accéder à ton espace.</div>
         <form id="login-form">
-          <div class="fld"><label>Identifiant</label><input type="text" id="login-user" required autocomplete="username"></div>
-          <div class="fld"><label>Mot de passe</label><input type="password" id="login-pass" required autocomplete="current-password"><button type="button" class="eye" id="login-eye">&#128065;</button></div>
+          <div class="fld"><label>Identifiant</label>
+            <svg class="ficon" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+            <input type="text" id="login-user" required autocomplete="username" placeholder="ex : Superviseur"></div>
+          <div class="fld"><label>Mot de passe</label>
+            <svg class="ficon" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <input type="password" id="login-pass" required autocomplete="current-password" placeholder="Mot de passe">
+            <button type="button" class="eye" id="login-eye">&#128065;</button></div>
           <button type="submit" class="go" id="login-btn">Se connecter</button>
           <div class="login-msg" id="login-msg"></div>
         </form>
+        <div class="login-foot">GAMServices Holding &middot; Accès sécurisé</div>
       </div>
     </div>
   </div>
@@ -1323,11 +1374,11 @@ async function openAgenceDetail(id){
 function showLogin(){ $('login-screen').style.display='flex'; $('app').style.display='none'; }
 function showApp(){ $('login-screen').style.display='none'; $('app').style.display='flex'; }
 function setupLogin(){
-  const logo=document.querySelector('.logo-desktop'); if(logo) $('login-logo').src=logo.src;
+  const logo=document.querySelector('.logo-desktop'); if(logo) document.querySelectorAll('[data-loginlogo]').forEach(im=>im.src=logo.src);
   $('login-form').addEventListener('submit', async e=>{
     e.preventDefault();
     const msg=$('login-msg'); msg.textContent='';
-    const btn=$('login-btn'); btn.disabled=true; btn.textContent='Connexion…';
+    const btn=$('login-btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Connexion…';
     try{
       const r=await fetch(API+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('login-user').value,password:$('login-pass').value})});
       const d=await r.json();
