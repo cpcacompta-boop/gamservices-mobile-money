@@ -88,6 +88,7 @@ async function migrate() {
     commercial_id INTEGER REFERENCES commerciaux(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
+  await addCols('zones', { quartiers: 'TEXT' });
 
   // --- PDV ---
   await q(`CREATE TABLE IF NOT EXISTS pdv (
@@ -505,17 +506,17 @@ app.get('/zones', wrap(async (req, res) => {
   res.json(r.rows);
 }));
 app.post('/zones', wrap(async (req, res) => {
-  const { nom, commercial_id } = req.body;
+  const { nom, commercial_id, quartiers } = req.body;
   const r = await pool.query(
-    'INSERT INTO zones (nom, commercial_id) VALUES ($1,$2) RETURNING id',
-    [nom, commercial_id || null]
+    'INSERT INTO zones (nom, commercial_id, quartiers) VALUES ($1,$2,$3) RETURNING id',
+    [nom, commercial_id || null, quartiers || null]
   );
   res.json({ id: r.rows[0].id, ok: true });
 }));
 app.put('/zones/:id', wrap(async (req, res) => {
-  const { nom, commercial_id } = req.body;
-  await pool.query('UPDATE zones SET nom=$1, commercial_id=$2 WHERE id=$3',
-    [nom, commercial_id || null, req.params.id]);
+  const { nom, commercial_id, quartiers } = req.body;
+  await pool.query('UPDATE zones SET nom=$1, commercial_id=$2, quartiers=$3 WHERE id=$4',
+    [nom, commercial_id || null, quartiers || null, req.params.id]);
   res.json({ ok: true });
 }));
 app.delete('/zones/:id', wrap(async (req, res) => {
