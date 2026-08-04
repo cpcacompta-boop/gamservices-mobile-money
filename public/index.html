@@ -360,7 +360,7 @@ const NAV = [
     {id:'rapports', label:'Écart de fonds'},
     {id:'agence', label:'Ops. Agence (PDV)'},
   ]},
-  {group:'Répertoire', items:[
+  {group:'Équipe', items:[
     {id:'pdv',         label:'Points de vente'},
     {id:'zones',       label:'Zones'},
     {id:'commerciaux', label:'Commerciaux'},
@@ -1064,15 +1064,18 @@ function renderZones(){
           <div class="field"><label>Nom de la zone</label><input type="text" name="nom" required></div>
           <div class="field"><label>Commercial responsable</label>
             <select name="commercial_id" required>${S.commerciaux.map(c=>`<option value="${c.id}">${nomComplet(c)}</option>`).join('')||'<option value="">Crée d\'abord un commercial</option>'}</select></div>
+          <div class="field span2"><label>Quartiers qui englobent cette zone</label>
+            <textarea name="quartiers" placeholder="ex : Adjamé, Cocody, Angré, Riviera…"></textarea></div>
         </div>
         <div class="msg" data-msg></div>
         <div class="form-actions"><button class="btn" type="submit">Créer la zone</button></div>
       </form>
     </div>
     <div class="panel"><div class="panel-head"><h2>Toutes les zones</h2></div><div class="table-wrap">
-      ${!S.zones.length?emptyTable("Aucune zone"):`<table><thead><tr><th>Zone</th><th>Commercial responsable</th><th class="num">PDV</th><th></th></tr></thead>
+      ${!S.zones.length?emptyTable("Aucune zone"):`<table><thead><tr><th>Zone</th><th>Commercial responsable</th><th>Quartiers couverts</th><th class="num">PDV</th><th></th></tr></thead>
       <tbody>${S.zones.map(z=>{ const n=S.pdv.filter(p=>p.zone_id===z.id).length; return `<tr>
         <td>${esc(z.nom)}</td><td>${esc([z.commercial_nom,z.commercial_prenoms].filter(Boolean).join(' ')||'—')}</td>
+        <td>${esc(z.quartiers||'—')}</td>
         <td class="num">${n}</td>
         <td><button class="icon-btn" data-del="/zones/${z.id}" data-refresh="zones" title="Supprimer">🗑</button></td></tr>`;}).join('')}</tbody></table>`}
     </div></div>`;
@@ -1194,7 +1197,7 @@ function attachHandlers(){
       const r=roleSel.value; let list=[];
       if(r==='MASTER') list=S.masters; else if(r==='COMMERCIAL') list=S.commerciaux; else if(r==='PDV') list=S.pdv;
       if(r==='SUPERVISEUR'){ linkWrap.style.display='none'; linkSel.innerHTML=''; }
-      else { linkWrap.style.display='flex'; linkSel.innerHTML=(list||[]).map(x=>`<option value="${x.id}">${esc(x.nom||nomComplet(x))}</option>`).join('')||'<option value="">— crée-le d\'abord dans le Répertoire —</option>'; }
+      else { linkWrap.style.display='flex'; linkSel.innerHTML=(list||[]).map(x=>`<option value="${x.id}">${esc(x.nom||nomComplet(x))}</option>`).join('')||'<option value="">— crée-le d\'abord dans le menu Équipe —</option>'; }
     };
     fill(); roleSel.addEventListener('change',fill);
   }
