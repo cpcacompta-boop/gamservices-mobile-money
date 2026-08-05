@@ -41,6 +41,9 @@ async function migrate() {
   // Verrouillage anti-force brute, stocké en base (survit aux redémarrages)
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_attempts INT DEFAULT 0`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ`);
+  // Infos de la personne rattachée au compte (équipe)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nom TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact TEXT`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -97,6 +100,10 @@ async function requireAuth(req, res, next) {
     next();
   } catch (e) { res.status(500).json({ error: e.message }); }
 }
+function requireRole(...roles) {
+  return (req, res, next) => roles.includes(req.user.role)
+    ? next() : res.status(403).json({ error: 'Acces reserve au superviseur' });
+}
 
 /* =====================================================================
    ROUTES
@@ -149,12 +156,53 @@ app.use(requireAuth);
 
 app.get('/me', wrap(async (req, res) => {
   const u = req.user;
-  res.json({ id: u.id, username: u.username, role: u.role, linked_id: u.linked_id });
+  res.json({ id: u.id, username: u.username, role: u.role, nom: u.nom, linked_id: u.linked_id });
 }));
 
 app.post('/logout', wrap(async (req, res) => {
   const token = getToken(req);
   if (token) await pool.query('DELETE FROM sessions WHERE token=$1', [token]);
+  res.json({ ok: true });
+}));
+
+/* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
+app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT id, username, role, nom, contact, actif, created_at
+     FROM users ORDER BY role, username`);
+  res.json(r.rows);
+}));
+
+app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const { username, password, role, nom, contact } = req.body;
+  if (!username || !password || !role)
+    return res.status(400).json({ error: 'Identifiant, mot de passe et rôle sont obligatoires' });
+  if (!['SUPERVISEUR', 'MASTER', 'COMMERCIAL', 'PDV'].includes(role))
+    return res.status(400).json({ error: 'Rôle invalide' });
+  const exists = await pool.query('SELECT 1 FROM users WHERE username=$1', [username]);
+  if (exists.rows.length) return res.status(400).json({ error: 'Cet identifiant existe déjà' });
+  const r = await pool.query(
+    `INSERT INTO users (username, pass_hash, role, nom, contact)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id, username, role, nom, contact, actif`,
+    [username, hashPass(password), role, nom || null, contact || null]);
+  res.json(r.rows[0]);
+}));
+
+app.post('/users/:id/password', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  if (!req.body.password) return res.status(400).json({ error: 'Nouveau mot de passe requis' });
+  await pool.query('UPDATE users SET pass_hash=$1, failed_attempts=0, locked_until=NULL WHERE id=$2',
+    [hashPass(req.body.password), req.params.id]);
+  await pool.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+app.delete('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const t = await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id]);
+  if (t.rows[0] && t.rows[0].role === 'SUPERVISEUR') {
+    const c = await pool.query("SELECT COUNT(*) c FROM users WHERE role='SUPERVISEUR' AND actif=TRUE");
+    if (Number(c.rows[0].c) <= 1) return res.status(400).json({ error: 'Impossible de supprimer le dernier superviseur' });
+  }
+  await pool.query('DELETE FROM users WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
 
