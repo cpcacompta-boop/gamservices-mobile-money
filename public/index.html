@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GAMServices Holding</title>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg:#EEF1F8; --surface:#FFFFFF; --surface-2:#F6F8FC;
@@ -12,15 +11,15 @@
     --brand:#2A4FA0; --brand-2:#3A62BE; --brand-deep-1:#1E2E5C; --brand-deep-2:#162143;
     --red:#B5322A; --gold:#C89B3C;
     --line:#E5EAF3;
-    --display:'Sora',sans-serif; --body:'Inter',sans-serif; --mono:'IBM Plex Mono',monospace;
+    --display:Arial,'Helvetica Neue',sans-serif; --body:Arial,'Helvetica Neue',sans-serif; --mono:Arial,sans-serif;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;}
-  body{font-family:var(--body);color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;}
+  body{font-family:var(--body);font-size:12px;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;}
 
   /* ---- LOGIN ---- */
-  #login-screen{position:fixed;inset:0;display:none;overflow:hidden;background:var(--bg);z-index:100;}
-  .login-wrap{display:flex;width:100%;height:100%;}
+  #login-screen{display:block;background:var(--bg);}
+  .login-wrap{display:flex;width:100%;min-height:100vh;min-height:100dvh;}
   .login-brand{flex:1;position:relative;overflow:hidden;background:linear-gradient(155deg,var(--brand-deep-1),var(--brand-deep-2));color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:40px;}
   .login-brand::before{content:"";position:absolute;width:150%;height:150%;top:-25%;left:-25%;background:radial-gradient(circle at 30% 30%,rgba(58,98,190,.45),transparent 45%),radial-gradient(circle at 75% 70%,rgba(181,50,42,.28),transparent 45%),radial-gradient(circle at 50% 96%,rgba(200,155,60,.22),transparent 42%);animation:auroraMove 14s ease-in-out infinite alternate;}
   .login-dots{position:absolute;inset:0;overflow:hidden;z-index:1;}
@@ -51,6 +50,11 @@
   .login-box button.go:disabled{opacity:.75;cursor:default;transform:none;box-shadow:none;}
   .login-box button.go .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;vertical-align:-2px;margin-right:8px;animation:spin .7s linear infinite;}
   .login-msg{color:var(--red);font-size:13px;font-weight:500;min-height:18px;margin-top:12px;}
+  .login-msg.lock{color:#9A6412;}
+  .caps-warn{display:none;font-size:11px;font-weight:600;color:#9A6412;margin-top:6px;}
+  .caps-warn::before{content:"⚠ ";}
+  .login-box .fld.shake input{border-color:var(--red);box-shadow:0 0 0 3px rgba(181,50,42,.14);}
+  .shake{animation:shake .38s cubic-bezier(.36,.07,.19,.97);}
   .login-foot{margin-top:26px;font-size:11.5px;color:var(--ink-faint);text-align:center;}
 
   /* ---- APP (page blanche, prête à construire) ---- */
@@ -71,14 +75,20 @@
   @keyframes floatCard{0%,100%{transform:translateY(0);}50%{transform:translateY(-8px);}}
   @keyframes glowPulse{0%,100%{opacity:.5;}50%{opacity:.9;}}
   @keyframes spin{to{transform:rotate(360deg);}}
+  @keyframes shake{10%,90%{transform:translateX(-2px);}20%,80%{transform:translateX(3px);}30%,50%,70%{transform:translateX(-6px);}40%,60%{transform:translateX(6px);}}
 
   /* ---- responsive ---- */
   @media (max-width:820px){
     .login-brand{display:none;}
-    .login-form-side{width:100%;}
-    .login-logo-m{display:block;width:150px;margin:0 auto 22px;}
+    .login-form-side{width:100%;flex:1;padding:30px 22px;}
+    .login-logo-m{display:block;width:150px;margin:0 auto 20px;}
     .app-top{padding:12px 16px;}
     .brand-mini span{display:none;}
+  }
+  @media (max-width:380px){
+    .login-form-side{padding:24px 16px;}
+    .login-box h1{font-size:22px;}
+    .login-logo-m{width:130px;}
   }
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
 </style>
@@ -110,7 +120,8 @@
           <div class="fld"><label>Mot de passe</label>
             <span class="fico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
             <input type="password" id="login-pass" required autocomplete="current-password" placeholder="Mot de passe">
-            <button type="button" class="eye" id="login-eye">&#128065;</button></div>
+            <button type="button" class="eye" id="login-eye">&#128065;</button>
+            <div class="caps-warn" id="caps-warn">Verr. Maj activé</div></div>
           <button type="submit" class="go" id="login-btn">Se connecter</button>
           <div class="login-msg" id="login-msg"></div>
         </form>
@@ -147,30 +158,64 @@
     box.innerHTML = h;
   }
 
-  function showLogin(){ $('login-screen').style.display='flex'; $('app').style.display='none'; }
+  function showLogin(){ $('login-screen').style.display='block'; $('app').style.display='none'; }
   function showApp(){ $('login-screen').style.display='none'; $('app').style.display='flex'; }
+
+  function shakeField(id){ const el=$(id).closest('.fld'); if(!el) return; el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
+  function vibrate(pat){ try{ if(navigator.vibrate) navigator.vibrate(pat); }catch(e){} }
+  let lockTimer=null;
+  function startLock(remaining){
+    clearInterval(lockTimer);
+    const u=$('login-user'), p=$('login-pass'), btn=$('login-btn'), msg=$('login-msg');
+    u.disabled=true; p.disabled=true; btn.disabled=true;
+    const tick=()=>{
+      if(remaining<=0){ clearInterval(lockTimer); u.disabled=false; p.disabled=false; btn.disabled=false; btn.textContent='Se connecter'; msg.textContent=''; msg.className='login-msg'; return; }
+      const mm=String(Math.floor(remaining/60)).padStart(2,'0'), ss=String(remaining%60).padStart(2,'0');
+      msg.innerHTML='🔒 Trop de tentatives. Réessaie dans <b>'+mm+':'+ss+'</b>';
+      msg.className='login-msg lock';
+      btn.textContent='Verrouillé';
+      remaining--;
+    };
+    tick(); lockTimer=setInterval(tick,1000);
+  }
 
   function setupLogin(){
     buildDots();
     $('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const msg=$('login-msg'); msg.textContent='';
+      if($('login-btn').disabled) return;
+      const msg=$('login-msg'); msg.textContent=''; msg.className='login-msg';
       const btn=$('login-btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Connexion…';
       try{
         const r = await fetch(API+'/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username:$('login-user').value, password:$('login-pass').value })});
-        const d = await r.json();
-        if(!r.ok) throw new Error(d.error || 'Échec de connexion');
+        const d = await r.json().catch(()=>({}));
+        if(r.status===423){ vibrate([70,40,70]); startLock(d.remaining || 300); return; }
+        if(!r.ok){
+          vibrate(200); shakeField('login-user'); shakeField('login-pass');
+          let t = d.error || 'Échec de connexion';
+          if(typeof d.attemptsLeft==='number') t += ' — il te reste ' + d.attemptsLeft + ' tentative' + (d.attemptsLeft>1?'s':'');
+          msg.textContent=t; msg.className='login-msg';
+          btn.disabled=false; btn.textContent='Se connecter';
+          return;
+        }
         S.auth = { token:d.token, user:d.user };
         $('user-badge').textContent = d.user.username + ' · ' + roleLabel(d.user.role);
         showApp();
-      }catch(err){ msg.textContent = err.message; btn.disabled=false; btn.textContent='Se connecter'; }
+      }catch(err){
+        vibrate(200); shakeField('login-user'); shakeField('login-pass');
+        msg.textContent = err.message || 'Erreur réseau'; btn.disabled=false; btn.textContent='Se connecter';
+      }
     });
     $('login-eye').addEventListener('click', () => { const p=$('login-pass'); p.type = (p.type==='password') ? 'text' : 'password'; });
+    const caps = (e) => { const on = e.getModifierState && e.getModifierState('CapsLock'); $('caps-warn').style.display = on ? 'block' : 'none'; };
+    $('login-pass').addEventListener('keydown', caps);
+    $('login-pass').addEventListener('keyup', caps);
+    $('login-user').addEventListener('keyup', caps);
     $('logout-btn').addEventListener('click', async () => {
       try{ if(S.auth) await fetch(API+'/logout', {method:'POST', headers:{'Authorization':'Bearer '+S.auth.token}}); }catch(e){}
       S.auth=null; showLogin();
       const btn=$('login-btn'); btn.disabled=false; btn.textContent='Se connecter';
-      $('login-msg').textContent=''; $('login-form').reset();
+      $('login-msg').textContent=''; $('login-form').reset(); $('caps-warn').style.display='none';
     });
   }
 
