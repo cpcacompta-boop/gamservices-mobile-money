@@ -2,8 +2,16 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>GAMServices Holding</title>
+<meta name="theme-color" content="#16224A">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GAMServices">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon-192.png">
 <style>
   :root{
     --bg:#EEF1F8; --surface:#FFFFFF; --surface-2:#F6F8FC;
@@ -61,6 +69,8 @@
   .lock-box .lk-count{font-size:27px;font-weight:700;color:#9A6412;line-height:1.15;font-variant-numeric:tabular-nums;}
   .lock-box .lk-hint{font-size:11px;color:#9A6412;opacity:.85;margin-top:1px;}
   .login-foot{margin-top:26px;font-size:11.5px;color:var(--ink-faint);text-align:center;}
+  .install-btn{margin-top:12px;background:none;border:1px solid var(--line);border-radius:20px;padding:7px 15px;font-size:12px;font-weight:700;color:var(--brand);cursor:pointer;transition:background .15s,border-color .15s;}
+  .install-btn:hover{background:var(--surface-2);border-color:var(--brand);}
 
   /* ============ APP LAYOUT ============ */
   #app{display:none;min-height:100vh;}
@@ -219,7 +229,7 @@
             <div><div class="lk-title">Compte verrouillé</div><div class="lk-count" id="lock-count">05:00</div><div class="lk-hint">Trop de tentatives — réessaie après le décompte</div></div>
           </div>
         </form>
-        <div class="login-foot">GAMServices Holding · Accès sécurisé</div>
+        <div class="login-foot">GAMServices Holding · Accès sécurisé<br><button type="button" id="install-btn" class="install-btn" style="display:none">📲 Installer l'application</button></div>
       </div>
     </div>
   </div>
@@ -250,6 +260,8 @@
   const $ = (id) => document.getElementById(id);
   const API = '';
   let S = { auth:null, view:'dashboard', users:[] };
+  let deferredPrompt=null;
+  window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); deferredPrompt=e; const b=document.getElementById('install-btn'); if(b) b.style.display='inline-block'; });
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function roleLabel(r){ return {SUPERVISEUR:'Superviseur',MASTER:'Master',COMMERCIAL:'Commercial',PDV:'Point de vente'}[r]||r; }
@@ -279,6 +291,7 @@
   function shakeField(id){ const el=$(id).closest('.fld'); if(!el) return; el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
   function vibrate(p){ try{ if(navigator.vibrate) navigator.vibrate(p); }catch(e){} }
   let lockTimer=null;
+  const MAX_FAILS=3; let clientFails=0;
   function startLock(remaining){
     clearInterval(lockTimer);
     const u=$('login-user'),p=$('login-pass'),btn=$('login-btn'),msg=$('login-msg'),box=$('lock-box'),cnt=$('lock-count');
@@ -297,10 +310,16 @@
       try{
         const r=await fetch(API+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('login-user').value,password:$('login-pass').value})});
         const d=await r.json().catch(()=>({}));
-        if(r.status===423){ vibrate([70,40,70]); startLock(d.remaining||300); return; }
-        if(!r.ok){ vibrate(200); shakeField('login-user'); shakeField('login-pass');
-          let t=d.error||'Échec de connexion'; if(typeof d.attemptsLeft==='number') t+=' — il te reste '+d.attemptsLeft+' tentative'+(d.attemptsLeft>1?'s':'');
-          msg.textContent=t; btn.disabled=false; btn.textContent='Se connecter'; return; }
+        if(r.status===423){ vibrate([80,50,80,50,140]); clientFails=0; startLock(d.remaining||300); return; }
+        if(!r.ok){
+          clientFails++;
+          vibrate([130,60,130]); shakeField('login-user'); shakeField('login-pass');
+          if(clientFails>=MAX_FAILS){ clientFails=0; startLock(300); return; }
+          const left=(typeof d.attemptsLeft==='number')?d.attemptsLeft:(MAX_FAILS-clientFails);
+          msg.textContent=(d.error||'Échec de connexion')+' — il te reste '+left+' tentative'+(left>1?'s':'');
+          btn.disabled=false; btn.textContent='Se connecter'; return;
+        }
+        clientFails=0;
         S.auth={token:d.token,user:d.user}; await startApp();
       }catch(err){ vibrate(200); shakeField('login-user'); shakeField('login-pass'); msg.textContent=err.message||'Erreur réseau'; btn.disabled=false; btn.textContent='Se connecter'; }
     });
@@ -446,6 +465,10 @@
     $('menu-toggle').addEventListener('click',toggleSidebar);
     $('backdrop').addEventListener('click',closeSidebar);
     showLogin();
+    // PWA : installation "vraie application"
+    if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{})); }
+    const ib=$('install-btn');
+    if(ib) ib.addEventListener('click', async ()=>{ if(!deferredPrompt) return; deferredPrompt.prompt(); try{ await deferredPrompt.userChoice; }catch(e){} deferredPrompt=null; ib.style.display='none'; });
   }
   init();
 </script>
