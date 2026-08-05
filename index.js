@@ -38,6 +38,9 @@ async function migrate() {
     actif BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
+  // Verrouillage anti-force brute, stocké en base (survit aux redémarrages)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_attempts INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -103,13 +106,39 @@ app.get('/health', wrap(async (req, res) => {
   res.json({ status: 'ok', database: 'connectee' });
 }));
 
-// Connexion (public)
+// Connexion (public) — verrouillage anti-force brute PERSISTANT (en base)
+const MAX_ATTEMPTS = 3;   // nombre de tentatives avant blocage
+const LOCK_MINUTES = 5;   // durée du blocage
+
 app.post('/login', wrap(async (req, res) => {
   const { username, password } = req.body;
   const r = await pool.query('SELECT * FROM users WHERE username=$1 AND actif=TRUE', [username]);
-  if (r.rows.length === 0 || !verifyPass(password, r.rows[0].pass_hash))
-    return res.status(401).json({ error: 'Identifiant ou mot de passe incorrect' });
   const u = r.rows[0];
+
+  // Compte inconnu : message générique (pas de blocage possible sans compte réel)
+  if (!u) return res.status(401).json({ error: 'Identifiant ou mot de passe incorrect' });
+
+  // Déjà verrouillé ? (la vérif est en base → vaut pour tous les navigateurs et survit aux redémarrages)
+  if (u.locked_until && new Date(u.locked_until).getTime() > Date.now()) {
+    const remaining = Math.ceil((new Date(u.locked_until).getTime() - Date.now()) / 1000);
+    return res.status(423).json({ error: 'Compte temporairement verrouillé', locked: true, remaining });
+  }
+
+  const ok = verifyPass(password, u.pass_hash);
+  if (!ok) {
+    const newCount = (u.failed_attempts || 0) + 1;
+    if (newCount >= MAX_ATTEMPTS) {
+      await pool.query(
+        "UPDATE users SET failed_attempts=0, locked_until = now() + interval '5 minutes' WHERE id=$1",
+        [u.id]);
+      return res.status(423).json({ error: 'Trop de tentatives', locked: true, remaining: LOCK_MINUTES * 60 });
+    }
+    await pool.query('UPDATE users SET failed_attempts=$1 WHERE id=$2', [newCount, u.id]);
+    return res.status(401).json({ error: 'Identifiant ou mot de passe incorrect', attemptsLeft: MAX_ATTEMPTS - newCount });
+  }
+
+  // Succès : on efface le compteur et le verrou
+  await pool.query('UPDATE users SET failed_attempts=0, locked_until=NULL WHERE id=$1', [u.id]);
   const token = crypto.randomBytes(24).toString('hex');
   await pool.query('INSERT INTO sessions (token, user_id) VALUES ($1,$2)', [token, u.id]);
   res.json({ token, user: { id: u.id, username: u.username, role: u.role, linked_id: u.linked_id } });
