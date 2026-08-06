@@ -49,6 +49,8 @@ async function migrate() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS piece_recto TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS piece_verso TEXT`);
+  // Oblige à définir un nouveau mot de passe (1er login ou après réinitialisation par le superviseur)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -153,7 +155,7 @@ app.post('/login', wrap(async (req, res) => {
   await pool.query('UPDATE users SET failed_attempts=0, locked_until=NULL WHERE id=$1', [u.id]);
   const token = crypto.randomBytes(24).toString('hex');
   await pool.query('INSERT INTO sessions (token, user_id) VALUES ($1,$2)', [token, u.id]);
-  res.json({ token, user: { id: u.id, username: u.username, role: u.role, linked_id: u.linked_id } });
+  res.json({ token, user: { id: u.id, username: u.username, role: u.role, linked_id: u.linked_id, mustChangePassword: !!u.must_change_password } });
 }));
 
 /* ---- PWA : manifest, icônes, service worker (public, mode vraie application) ---- */
@@ -181,6 +183,16 @@ app.post('/logout', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// L'utilisateur connecté définit son propre nouveau mot de passe (1ère connexion ou après réinitialisation)
+app.post('/change-password', wrap(async (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || String(newPassword).length < 4)
+    return res.status(400).json({ error: 'Le nouveau mot de passe doit contenir au moins 4 caractères' });
+  await pool.query('UPDATE users SET pass_hash=$1, must_change_password=FALSE, failed_attempts=0, locked_until=NULL WHERE id=$2',
+    [hashPass(newPassword), req.user.id]);
+  res.json({ ok: true });
+}));
+
 /* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   // On exclut les images (photo, pièces) de la liste pour rester léger
@@ -198,25 +210,29 @@ app.get('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   res.json(u);
 }));
 
+const DEFAULT_PASSWORD = '0000'; // mot de passe par défaut à la création d'un compte
+
 app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  const { username, password, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso } = req.body;
-  if (!username || !password || !role)
-    return res.status(400).json({ error: 'Identifiant, mot de passe et rôle sont obligatoires' });
+  const { username, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso } = req.body;
+  if (!username || !role)
+    return res.status(400).json({ error: 'Identifiant et rôle sont obligatoires' });
   if (!['SUPERVISEUR', 'MASTER', 'COMMERCIAL', 'PDV'].includes(role))
     return res.status(400).json({ error: 'Rôle invalide' });
   const exists = await pool.query('SELECT 1 FROM users WHERE username=$1', [username]);
   if (exists.rows.length) return res.status(400).json({ error: 'Cet identifiant existe déjà' });
+  // Mot de passe par défaut 0000 : le compte devra en définir un nouveau à la 1ère connexion
   const r = await pool.query(
-    `INSERT INTO users (username, pass_hash, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, username, role, nom, prenoms, contact, code, actif`,
-    [username, hashPass(password), role, nom || null, prenoms || null, contact || null, code || null,
+    `INSERT INTO users (username, pass_hash, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso, must_change_password)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id, username, role, nom, prenoms, contact, code, actif`,
+    [username, hashPass(DEFAULT_PASSWORD), role, nom || null, prenoms || null, contact || null, code || null,
      photo || null, piece_recto || null, piece_verso || null]);
   res.json(r.rows[0]);
 }));
 
 app.post('/users/:id/password', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   if (!req.body.password) return res.status(400).json({ error: 'Nouveau mot de passe requis' });
-  await pool.query('UPDATE users SET pass_hash=$1, failed_attempts=0, locked_until=NULL WHERE id=$2',
+  // Réinitialisation = le compte devra redéfinir son mot de passe à sa prochaine connexion
+  await pool.query('UPDATE users SET pass_hash=$1, failed_attempts=0, locked_until=NULL, must_change_password=TRUE WHERE id=$2',
     [hashPass(req.body.password), req.params.id]);
   await pool.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
   res.json({ ok: true });
