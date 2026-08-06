@@ -5,39 +5,14 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const http = require('http');
 const crypto = require('crypto');
 const { Pool } = require('pg');
 const cors = require('cors');
-const { WebSocketServer } = require('ws');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
-
-// Serveur HTTP brut (nécessaire pour brancher le WebSocket dessus) + registre
-// des connexions temps réel : userId -> Set de sockets ouverts pour ce compte.
-const server = http.createServer(app);
-const LIVE = new Map(); // userId (number) -> Set<WebSocket>
-function registerSocket(userId, ws) {
-  if (!LIVE.has(userId)) LIVE.set(userId, new Set());
-  LIVE.get(userId).add(ws);
-  ws.on('close', () => { const s = LIVE.get(userId); if (s) { s.delete(ws); if (!s.size) LIVE.delete(userId); } });
-}
-function sendTo(userId, payload) {
-  const set = LIVE.get(Number(userId));
-  if (!set) return false;
-  const msg = JSON.stringify(payload);
-  let sent = false;
-  for (const ws of set) { if (ws.readyState === 1) { ws.send(msg); sent = true; } }
-  return sent;
-}
-function broadcastToRole(role, payload) {
-  // Diffuse à tous les superviseurs connectés (ex: mise à jour de position en direct)
-  const msg = JSON.stringify(payload);
-  for (const [, set] of LIVE) for (const ws of set) { if (ws.readyState === 1 && ws.__role === role) ws.send(msg); }
-}
 
 // Sert le frontend : index.html qu'il soit à côté de index.js ou dans "public"
 const STATIC_DIR = [__dirname, path.join(__dirname, 'public')]
@@ -76,11 +51,6 @@ async function migrate() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS piece_verso TEXT`);
   // Oblige à définir un nouveau mot de passe (1er login ou après réinitialisation par le superviseur)
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE`);
-  // Dernière position connue de l'agent (mise à jour en direct depuis son téléphone)
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS loc_accuracy DOUBLE PRECISION`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS loc_updated_at TIMESTAMPTZ`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -228,7 +198,7 @@ app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   // On exclut les images (photo, pièces) de la liste pour rester léger
   const r = await pool.query(
     `SELECT id, username, role, nom, prenoms, contact, code, actif, created_at,
-            (photo IS NOT NULL) AS a_photo, lat, lng, loc_updated_at
+            (photo IS NOT NULL) AS a_photo
      FROM users ORDER BY role, username`);
   res.json(r.rows);
 }));
@@ -259,82 +229,31 @@ app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   res.json(r.rows[0]);
 }));
 
-// Modifier les informations d'un compte (Superviseur uniquement)
-app.put('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  const { nom, prenoms, contact, code, photo, piece_recto, piece_verso, role } = req.body;
-  const fields = []; const vals = []; let i = 1;
-  const push = (col, val) => { fields.push(`${col}=$${i++}`); vals.push(val); };
-  if (nom !== undefined) push('nom', nom || null);
-  if (prenoms !== undefined) push('prenoms', prenoms || null);
-  if (contact !== undefined) push('contact', contact || null);
-  if (code !== undefined) push('code', code || null);
-  if (photo !== undefined) push('photo', photo || null);
-  if (piece_recto !== undefined) push('piece_recto', piece_recto || null);
-  if (piece_verso !== undefined) push('piece_verso', piece_verso || null);
-  if (role !== undefined) {
-    if (!['SUPERVISEUR', 'MASTER', 'COMMERCIAL', 'PDV'].includes(role))
-      return res.status(400).json({ error: 'Rôle invalide' });
-    push('role', role);
-  }
-  if (!fields.length) return res.status(400).json({ error: 'Aucune modification envoyée' });
-  vals.push(req.params.id);
-  const r = await pool.query(
-    `UPDATE users SET ${fields.join(', ')} WHERE id=$${i} RETURNING id, username, role, nom, prenoms, contact, code, actif`,
-    vals);
-  if (!r.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
-  // Si le compte est connecté, il reçoit ses infos à jour instantanément (sans recharger)
-  sendTo(req.params.id, { type: 'profile_updated', user: r.rows[0] });
-  res.json(r.rows[0]);
-}));
-
-// Bloquer un compte : coupe l'accès en base ET pousse une déconnexion immédiate
-// au téléphone/navigateur du compte s'il est en train de l'utiliser (WebSocket, < 2s).
-app.post('/users/:id/block', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  const t = await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id]);
-  if (!t.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
-  if (t.rows[0].role === 'SUPERVISEUR') {
-    const c = await pool.query("SELECT COUNT(*) c FROM users WHERE role='SUPERVISEUR' AND actif=TRUE");
-    if (Number(c.rows[0].c) <= 1) return res.status(400).json({ error: 'Impossible de bloquer le dernier superviseur' });
-  }
-  await pool.query('UPDATE users SET actif=FALSE WHERE id=$1', [req.params.id]);
-  await pool.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
-  const pushed = sendTo(req.params.id, { type: 'blocked', reason: req.body && req.body.reason || null });
-  res.json({ ok: true, liveDisconnect: pushed });
-}));
-
-app.post('/users/:id/unblock', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  await pool.query('UPDATE users SET actif=TRUE, failed_attempts=0, locked_until=NULL WHERE id=$1', [req.params.id]);
-  res.json({ ok: true });
-}));
-
-// L'agent envoie sa position (déclenché depuis son téléphone toutes les X secondes en tâche de fond)
-app.post('/location', wrap(async (req, res) => {
-  const { lat, lng, accuracy } = req.body;
-  if (typeof lat !== 'number' || typeof lng !== 'number')
-    return res.status(400).json({ error: 'Coordonnées invalides' });
-  await pool.query('UPDATE users SET lat=$1, lng=$2, loc_accuracy=$3, loc_updated_at=now() WHERE id=$4',
-    [lat, lng, accuracy || null, req.user.id]);
-  // Diffuse en direct à tous les superviseurs connectés qui suivent la carte
-  broadcastToRole('SUPERVISEUR', {
-    type: 'location', userId: req.user.id, username: req.user.username,
-    nom: req.user.nom, lat, lng, accuracy: accuracy || null, at: new Date().toISOString()
-  });
-  res.json({ ok: true });
-}));
-
-// Dernière position connue d'un compte (Superviseur)
-app.get('/users/:id/location', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  const r = await pool.query('SELECT lat, lng, loc_accuracy, loc_updated_at FROM users WHERE id=$1', [req.params.id]);
-  if (!r.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
-  res.json(r.rows[0]);
-}));
-
 app.post('/users/:id/password', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   if (!req.body.password) return res.status(400).json({ error: 'Nouveau mot de passe requis' });
   // Réinitialisation = le compte devra redéfinir son mot de passe à sa prochaine connexion
   await pool.query('UPDATE users SET pass_hash=$1, failed_attempts=0, locked_until=NULL, must_change_password=TRUE WHERE id=$2',
     [hashPass(req.body.password), req.params.id]);
   await pool.query('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+// Bloquer un compte : le rend inactif et coupe immédiatement sa session (il sera déconnecté à sa prochaine requête)
+app.post('/users/:id/block', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const t = await pool.query('SELECT role, actif FROM users WHERE id=$1', [req.params.id]);
+  if (!t.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
+  if (t.rows[0].role === 'SUPERVISEUR') return res.status(400).json({ error: 'Impossible de bloquer un superviseur' });
+  if (t.rows[0].actif === false) return res.json({ ok: true, liveDisconnect: false }); // déjà bloqué
+  await pool.query('UPDATE users SET actif=FALSE WHERE id=$1', [req.params.id]);
+  const del = await pool.query('DELETE FROM sessions WHERE user_id=$1 RETURNING token', [req.params.id]);
+  res.json({ ok: true, liveDisconnect: del.rows.length > 0 });
+}));
+
+// Débloquer un compte : le rend de nouveau actif et lève un éventuel verrouillage anti-force brute
+app.post('/users/:id/unblock', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const t = await pool.query('SELECT id FROM users WHERE id=$1', [req.params.id]);
+  if (!t.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
+  await pool.query('UPDATE users SET actif=TRUE, failed_attempts=0, locked_until=NULL WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
 
@@ -356,35 +275,12 @@ app.get('*', (req, res) => {
 });
 
 /* =====================================================================
-   WEBSOCKET TEMPS RÉEL
-   Le client se connecte sur  wss://<host>/ws?token=<token de session>
-   -> permet au superviseur de bloquer un compte et de voir sa position
-      s'actualiser en direct, sans que personne n'ait besoin de rafraîchir.
-   ===================================================================== */
-const wss = new WebSocketServer({ server, path: '/ws' });
-wss.on('connection', async (ws, req) => {
-  try {
-    const url = new URL(req.url, 'http://x');
-    const token = url.searchParams.get('token');
-    if (!token) { ws.close(4001, 'Token manquant'); return; }
-    const r = await pool.query(
-      `SELECT u.id, u.role, u.actif FROM sessions s JOIN users u ON u.id=s.user_id
-       WHERE s.token=$1`, [token]);
-    if (!r.rows.length || !r.rows[0].actif) { ws.close(4001, 'Session invalide'); return; }
-    const u = r.rows[0];
-    ws.__role = u.role;
-    registerSocket(u.id, ws);
-    ws.send(JSON.stringify({ type: 'ready' }));
-  } catch (e) { try { ws.close(); } catch (_) {} }
-});
-
-/* =====================================================================
    DEMARRAGE
    ===================================================================== */
 const PORT = process.env.PORT || 3000;
 migrate()
-  .then(() => server.listen(PORT, () => console.log('\u2714 GAMServices demarre sur le port ' + PORT)))
+  .then(() => app.listen(PORT, () => console.log('\u2714 GAMServices demarre sur le port ' + PORT)))
   .catch(err => {
     console.error('\u2718 Echec migration au demarrage :', err.message);
-    server.listen(PORT, () => console.log('\u26a0 Serveur demarre (migration en erreur) port ' + PORT));
+    app.listen(PORT, () => console.log('\u26a0 Serveur demarre (migration en erreur) port ' + PORT));
   });
