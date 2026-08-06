@@ -159,6 +159,21 @@
   .link:hover{text-decoration:underline;text-underline-offset:2px;}
   .icon-btn{all:unset;cursor:pointer;font-size:15px;padding:5px 8px;border-radius:7px;color:var(--ink-faint);}
   .icon-btn:hover{background:var(--red-soft);color:var(--red);}
+  /* Boutons d'action (tableau) — icônes rondes façon appli internationale, avec info-bulle */
+  .act-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  .act-btn{all:unset;box-sizing:border-box;cursor:pointer;width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink-soft);background:var(--surface-2);border:1px solid var(--line);transition:background .15s,color .15s,border-color .15s,transform .12s,box-shadow .15s;position:relative;}
+  .act-btn svg{width:16px;height:16px;pointer-events:none;}
+  .act-btn:hover{transform:translateY(-1px);box-shadow:0 5px 12px rgba(20,33,74,.14);}
+  .act-btn:disabled{opacity:.55;cursor:default;transform:none;box-shadow:none;}
+  .act-btn.view:hover{background:#E4ECFB;color:var(--brand);border-color:var(--brand);}
+  .act-btn.edit:hover{background:#EDE7F6;color:#5B3E9A;border-color:#5B3E9A;}
+  .act-btn.reset:hover{background:var(--warn-soft);color:var(--warn);border-color:var(--warn);}
+  .act-btn.block{color:var(--red);} .act-btn.block:hover{background:var(--red-soft);border-color:var(--red);}
+  .act-btn.unblock{color:var(--pos);} .act-btn.unblock:hover{background:var(--pos-soft);border-color:var(--pos);}
+  .act-btn.del:hover{background:var(--red-soft);color:var(--red);border-color:var(--red);}
+  .act-btn[data-tip]::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%) translateY(4px);background:var(--ink);color:#fff;font-size:10.5px;font-weight:700;letter-spacing:.01em;padding:5px 9px;border-radius:7px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:15;box-shadow:0 6px 14px rgba(0,0,0,.18);}
+  .act-btn[data-tip]::before{content:"";position:absolute;bottom:calc(100% + 3px);left:50%;transform:translateX(-50%);border:4px solid transparent;border-top-color:var(--ink);opacity:0;transition:opacity .15s;pointer-events:none;z-index:15;}
+  .act-btn[data-tip]:hover::after,.act-btn[data-tip]:hover::before{opacity:1;transform:translateX(-50%) translateY(0);}
   /* photo upload */
   .photo-field{display:flex;align-items:center;gap:12px;border:1px dashed var(--line);border-radius:11px;padding:9px;background:var(--surface-2);}
   .pvbox{width:60px;height:60px;border-radius:9px;border:1px solid var(--line);background:#fff center/cover no-repeat;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--ink-faint);font-size:22px;}
@@ -274,10 +289,12 @@
         <form id="force-pw-form">
           <div class="fld"><label>Nouveau mot de passe</label>
             <span class="fico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
-            <input type="password" id="force-pw-1" required minlength="4" autocomplete="new-password" placeholder="Au moins 4 caractères"></div>
+            <input type="password" id="force-pw-1" required minlength="4" autocomplete="new-password" placeholder="Au moins 4 caractères">
+            <button type="button" class="eye" id="force-pw-eye-1">&#128065;</button></div>
           <div class="fld"><label>Confirme le mot de passe</label>
             <span class="fico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
-            <input type="password" id="force-pw-2" required minlength="4" autocomplete="new-password" placeholder="Retape le même mot de passe"></div>
+            <input type="password" id="force-pw-2" required minlength="4" autocomplete="new-password" placeholder="Retape le même mot de passe">
+            <button type="button" class="eye" id="force-pw-eye-2">&#128065;</button></div>
           <button type="submit" class="go" id="force-pw-btn">Valider mon mot de passe</button>
           <div class="login-msg" id="force-pw-msg"></div>
         </form>
@@ -313,6 +330,7 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const API = '';
+  const DEFAULT_PASSWORD = '0000'; // doit correspondre au DEFAULT_PASSWORD du backend
   let S = { auth:null, view:'dashboard', users:[] };
   let deferredPrompt=null;
   let LIVE=null;            // connexion WebSocket temps réel
@@ -389,6 +407,8 @@
     $('login-pass').addEventListener('keydown',caps); $('login-pass').addEventListener('keyup',caps); $('login-user').addEventListener('keyup',caps);
   }
   function setupForcePassword(){
+    $('force-pw-eye-1').addEventListener('click',()=>{ const p=$('force-pw-1'); p.type=(p.type==='password')?'text':'password'; });
+    $('force-pw-eye-2').addEventListener('click',()=>{ const p=$('force-pw-2'); p.type=(p.type==='password')?'text':'password'; });
     $('force-pw-form').addEventListener('submit', async (e)=>{
       e.preventDefault();
       const msg=$('force-pw-msg'); msg.textContent=''; msg.className='login-msg';
@@ -467,6 +487,13 @@
     return `<div class="welcome"><h2>Bonjour, ${esc(nom)} 👋</h2><p>Content de te revoir. Voici ton espace ${esc(roleLabel(u.role))}.</p></div>${cards}`;
   }
 
+  /* Icônes des boutons d'action (tableau Équipe) */
+  const ICON_VIEW='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_EDIT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+  const ICON_RESET='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2"/><path d="M15.5 7.5l3 3"/><path d="M18 5l3 3"/></svg>';
+  const ICON_BLOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.9 4.9l14.2 14.2"/></svg>';
+  const ICON_UNBLOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>';
+  const ICON_TRASH='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
   function renderEquipe(){
     const users=S.users||[];
     const roleOpts='<option value="MASTER">Master</option><option value="COMMERCIAL">Commercial</option><option value="PDV">Point de vente</option><option value="SUPERVISEUR">Superviseur</option>';
@@ -494,7 +521,13 @@
             <td>${esc(u.contact||'—')}</td>
             <td>${statut}</td>
             <td style="font-size:11.5px" data-loc-live="${u.id}">${mapLink(u.lat,u.lng)}${u.loc_updated_at?'<div style="color:var(--ink-faint);margin-top:2px">'+timeAgo(u.loc_updated_at)+'</div>':''}</td>
-            <td><button class="link" data-viewuser="${u.id}">Voir</button> · <button class="link" data-edituser="${u.id}">Modifier</button> · <button class="link" data-reset="${u.id}" data-uname="${esc(u.username)}">Mot de passe</button>${isSup?'':' · <button class="link" data-block="'+u.id+'" data-blocked="'+(u.actif===false?'1':'0')+'" data-uname="'+esc(u.username)+'" style="color:'+(u.actif===false?'var(--pos)':'var(--red)')+'">'+(u.actif===false?'Débloquer':'Bloquer')+'</button> · <button class="icon-btn" data-deluser="'+u.id+'" title="Supprimer">🗑</button>'}</td>
+            <td><div class="act-btns">
+              <button class="act-btn view" data-tip="Voir" data-viewuser="${u.id}">${ICON_VIEW}</button>
+              <button class="act-btn edit" data-tip="Modifier" data-edituser="${u.id}">${ICON_EDIT}</button>
+              <button class="act-btn reset" data-tip="Réinitialiser" data-reset="${u.id}" data-uname="${esc(u.username)}">${ICON_RESET}</button>
+              ${isSup?'':`<button class="act-btn ${u.actif===false?'unblock':'block'}" data-tip="${u.actif===false?'Débloquer':'Bloquer'}" data-block="${u.id}" data-blocked="${u.actif===false?'1':'0'}" data-uname="${esc(u.username)}">${u.actif===false?ICON_UNBLOCK:ICON_BLOCK}</button>
+              <button class="act-btn del" data-tip="Supprimer" data-deluser="${u.id}">${ICON_TRASH}</button>`}
+            </div></td>
           </tr>`;}).join(''):'<tr class="empty-row"><td colspan="8">Aucun compte pour le moment — crée le premier ci-dessus</td></tr>'}</tbody>
         </table></div>
       </div>`;
@@ -662,9 +695,14 @@
       }catch(err){ b.textContent=orig; b.disabled=false; alert('Erreur : '+err.message); }
     }));
     document.querySelectorAll('[data-reset]').forEach(b=>b.addEventListener('click', async ()=>{
-      const pw=prompt('Nouveau mot de passe pour '+b.dataset.uname+' :'); if(!pw) return;
-      try{ await api('/users/'+b.dataset.reset+'/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})}); alert('Mot de passe mis à jour ✔'); }
+      if(!confirm('Réinitialiser le mot de passe de '+b.dataset.uname+' ?\n\nSon mot de passe redeviendra le mot de passe par défaut (0000). Il devra obligatoirement en définir un nouveau à sa prochaine connexion.')) return;
+      const orig=b.innerHTML; b.innerHTML='…'; b.disabled=true;
+      try{
+        await api('/users/'+b.dataset.reset+'/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:DEFAULT_PASSWORD})});
+        alert('✔ Mot de passe réinitialisé — identifiant : '+b.dataset.uname+' / mot de passe par défaut : '+DEFAULT_PASSWORD);
+      }
       catch(err){ alert('Erreur : '+err.message); }
+      finally{ b.innerHTML=orig; b.disabled=false; }
     }));
     document.querySelectorAll('[data-deluser]').forEach(b=>b.addEventListener('click', async ()=>{
       if(!confirm('Supprimer ce compte ? Action définitive.')) return;
