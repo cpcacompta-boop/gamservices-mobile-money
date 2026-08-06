@@ -201,6 +201,32 @@
   .dl dt{font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;padding-top:2px;}
   .dl dd{margin:0;}
 
+  /* ============ DIALOGUE (remplace confirm()/alert() natifs) ============ */
+  .dlg-overlay{position:fixed;inset:0;background:rgba(12,20,42,.58);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;padding:20px;z-index:300;}
+  .dlg-overlay.open{display:flex;}
+  .dlg-box{background:var(--surface);border-radius:20px;max-width:400px;width:100%;box-shadow:0 30px 70px rgba(10,20,50,.38);overflow:hidden;text-align:center;padding:32px 28px 26px;animation:dlgIn .2s cubic-bezier(.22,1,.36,1);}
+  @keyframes dlgIn{from{opacity:0;transform:scale(.94) translateY(10px);}to{opacity:1;transform:scale(1) translateY(0);}}
+  .dlg-icon{width:60px;height:60px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;}
+  .dlg-icon svg{width:28px;height:28px;}
+  .dlg-icon.info{background:#E4ECFB;color:var(--brand);}
+  .dlg-icon.warn{background:var(--warn-soft);color:var(--warn);}
+  .dlg-icon.danger{background:var(--red-soft);color:var(--red);}
+  .dlg-icon.success{background:var(--pos-soft);color:var(--pos);}
+  .dlg-title{font-family:var(--display);font-size:17.5px;font-weight:700;margin:0 0 9px;color:var(--ink);}
+  .dlg-msg{font-size:13px;color:var(--ink-soft);line-height:1.65;margin:0 0 24px;white-space:pre-line;}
+  .dlg-actions{display:flex;gap:10px;}
+  .dlg-actions button{all:unset;box-sizing:border-box;flex:1;cursor:pointer;padding:12px;border-radius:12px;font-weight:700;font-size:13.5px;text-align:center;transition:transform .12s,box-shadow .15s,opacity .15s;}
+  .dlg-actions button:disabled{opacity:.6;cursor:default;transform:none;}
+  .dlg-actions .dlg-cancel{background:var(--surface-2);color:var(--ink-soft);border:1px solid var(--line);}
+  .dlg-actions .dlg-cancel:hover{background:var(--line-2);}
+  .dlg-actions .dlg-ok{color:#fff;}
+  .dlg-actions .dlg-ok:hover{transform:translateY(-1px);}
+  .dlg-actions .dlg-ok.info{background:linear-gradient(120deg,var(--brand),var(--brand-2));box-shadow:0 8px 18px rgba(42,79,160,.30);}
+  .dlg-actions .dlg-ok.warn{background:linear-gradient(120deg,#D3A94E,var(--gold));box-shadow:0 8px 18px rgba(200,155,60,.32);}
+  .dlg-actions .dlg-ok.danger{background:linear-gradient(120deg,#C7392F,var(--red));box-shadow:0 8px 18px rgba(181,50,42,.32);}
+  .dlg-actions .dlg-ok.success{background:linear-gradient(120deg,#17A06E,var(--pos));box-shadow:0 8px 18px rgba(18,133,90,.32);}
+  @media (max-width:420px){ .dlg-box{padding:26px 20px 22px;} .dlg-actions{flex-direction:column-reverse;} }
+
   /* ============ keyframes ============ */
   @keyframes auroraMove{from{transform:translate(0,0) rotate(0);}to{transform:translate(4%,3%) rotate(8deg);}}
   @keyframes floatDot{from{transform:translateY(0);}to{transform:translateY(-115vh);}}
@@ -326,6 +352,7 @@
 </div>
 
 <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div class="dlg-overlay" id="dlg-overlay"></div>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -340,6 +367,44 @@
   window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); deferredPrompt=e; const b=document.getElementById('install-btn'); if(b) b.style.display='inline-block'; });
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  /* ---------- DIALOGUE (remplace confirm()/alert() natifs par une fenêtre pro) ---------- */
+  const DLG_ICONS = {
+    info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    danger:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+    success:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>'
+  };
+  let dlgKeyHandler = null;
+  function dlg({type='info', title='', message='', okText='OK', cancelText='Annuler', showCancel=true}={}){
+    return new Promise(resolve=>{
+      const ov = $('dlg-overlay');
+      ov.innerHTML =
+        '<div class="dlg-box" role="alertdialog" aria-modal="true" aria-labelledby="dlg-title">'+
+          '<div class="dlg-icon '+type+'">'+(DLG_ICONS[type]||DLG_ICONS.info)+'</div>'+
+          '<h3 class="dlg-title" id="dlg-title">'+esc(title)+'</h3>'+
+          (message?'<p class="dlg-msg">'+esc(message)+'</p>':'')+
+          '<div class="dlg-actions">'+
+            (showCancel?'<button class="dlg-cancel" data-dlg-cancel>'+esc(cancelText)+'</button>':'')+
+            '<button class="dlg-ok '+type+'" data-dlg-ok>'+esc(okText)+'</button>'+
+          '</div>'+
+        '</div>';
+      ov.classList.add('open');
+      const okBtn = ov.querySelector('[data-dlg-ok]'), cancelBtn = ov.querySelector('[data-dlg-cancel]');
+      const close = (val)=>{ ov.classList.remove('open'); ov.innerHTML=''; if(dlgKeyHandler){ document.removeEventListener('keydown',dlgKeyHandler); dlgKeyHandler=null; } resolve(val); };
+      okBtn.addEventListener('click',()=>close(true));
+      if(cancelBtn) cancelBtn.addEventListener('click',()=>close(false));
+      ov.addEventListener('mousedown', e=>{ if(e.target===ov) close(false); }, { once:true });
+      dlgKeyHandler = (e)=>{ if(e.key==='Escape') close(false); else if(e.key==='Enter') close(true); };
+      document.addEventListener('keydown', dlgKeyHandler);
+      setTimeout(()=>okBtn.focus(),10);
+    });
+  }
+  const dlgConfirm=(title,message,opts)=>dlg(Object.assign({type:'warn',title,message,okText:'Confirmer',showCancel:true},opts));
+  const dlgAlert=(title,message,opts)=>dlg(Object.assign({type:'info',title,message,okText:'OK',showCancel:false},opts));
+  const dlgSuccess=(title,message,opts)=>dlgAlert(title,message,Object.assign({type:'success'},opts));
+  const dlgError=(title,message,opts)=>dlgAlert(title,message,Object.assign({type:'danger'},opts));
+
   function roleLabel(r){ return {SUPERVISEUR:'Superviseur',MASTER:'Master',COMMERCIAL:'Commercial',PDV:'Point de vente'}[r]||r; }
   function rolePill(r){ const c={SUPERVISEUR:'sup',MASTER:'master',COMMERCIAL:'com',PDV:'pdv'}[r]||'com'; return '<span class="pill '+c+'">'+roleLabel(r)+'</span>'; }
   function initials(s){ s=(s||'?').trim(); const p=s.split(/\s+/); return ((p[0]||'?')[0]+(p[1]||'')[0]||'').toUpperCase().slice(0,2)||s.slice(0,2).toUpperCase(); }
@@ -613,7 +678,7 @@
         '</div>';
       $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
       $('overlay').classList.add('open');
-    }catch(err){ alert('Erreur : '+err.message); }
+    }catch(err){ dlgError('Erreur', err.message); }
   }
 
   /* ---------- MODIFIER UN COMPTE ---------- */
@@ -661,7 +726,7 @@
         }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
       });
       $('overlay').classList.add('open');
-    }catch(err){ alert('Erreur : '+err.message); }
+    }catch(err){ dlgError('Erreur', err.message); }
   }
 
   function attachHandlers(){
@@ -685,29 +750,42 @@
     document.querySelectorAll('[data-block]').forEach(b=>b.addEventListener('click', async ()=>{
       const willBlock = b.dataset.blocked==='0';
       const label = willBlock?'Bloquer':'Débloquer';
-      if(!confirm(label+' le compte de '+b.dataset.uname+' ?'+(willBlock?' Il sera déconnecté immédiatement, même en pleine utilisation.':''))) return;
-      const orig=b.textContent; b.textContent='…'; b.disabled=true;
+      const ok = await dlgConfirm(
+        label+' ce compte ?',
+        'Compte : '+b.dataset.uname+(willBlock?'\n\nIl sera déconnecté immédiatement, même en pleine utilisation.':'\n\nIl pourra de nouveau se connecter normalement.'),
+        { type: willBlock?'danger':'success', okText: label }
+      );
+      if(!ok) return;
+      const orig=b.innerHTML; b.innerHTML='…'; b.disabled=true;
       try{
         const r=await api('/users/'+b.dataset.block+'/'+(willBlock?'block':'unblock'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
         S.users=await api('/users');
         renderView();
-        if(willBlock) alert(r.liveDisconnect? '✔ Compte bloqué — déconnexion immédiate effectuée.' : '✔ Compte bloqué (il était hors ligne, le blocage s\'appliquera à sa prochaine action).');
-      }catch(err){ b.textContent=orig; b.disabled=false; alert('Erreur : '+err.message); }
+        if(willBlock) dlgSuccess('Compte bloqué', r.liveDisconnect? 'Déconnexion immédiate effectuée.' : 'Le compte était hors ligne — le blocage s\'appliquera à sa prochaine action.');
+        else dlgSuccess('Compte débloqué', b.dataset.uname+' peut de nouveau se connecter.');
+      }catch(err){ b.innerHTML=orig; b.disabled=false; dlgError('Erreur', err.message); }
     }));
     document.querySelectorAll('[data-reset]').forEach(b=>b.addEventListener('click', async ()=>{
-      if(!confirm('Réinitialiser le mot de passe de '+b.dataset.uname+' ?\n\nSon mot de passe redeviendra le mot de passe par défaut (0000). Il devra obligatoirement en définir un nouveau à sa prochaine connexion.')) return;
+      const ok = await dlgConfirm(
+        'Réinitialiser le mot de passe ?',
+        'Compte : '+b.dataset.uname+'\n\nSon mot de passe redeviendra le mot de passe par défaut ('+DEFAULT_PASSWORD+'). Il devra obligatoirement en définir un nouveau à sa prochaine connexion.',
+        { type:'warn', okText:'Réinitialiser' }
+      );
+      if(!ok) return;
       const orig=b.innerHTML; b.innerHTML='…'; b.disabled=true;
       try{
         await api('/users/'+b.dataset.reset+'/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:DEFAULT_PASSWORD})});
-        alert('✔ Mot de passe réinitialisé — identifiant : '+b.dataset.uname+' / mot de passe par défaut : '+DEFAULT_PASSWORD);
+        dlgSuccess('Mot de passe réinitialisé', 'Identifiant : '+b.dataset.uname+'\nMot de passe par défaut : '+DEFAULT_PASSWORD);
       }
-      catch(err){ alert('Erreur : '+err.message); }
+      catch(err){ dlgError('Erreur', err.message); }
       finally{ b.innerHTML=orig; b.disabled=false; }
     }));
     document.querySelectorAll('[data-deluser]').forEach(b=>b.addEventListener('click', async ()=>{
-      if(!confirm('Supprimer ce compte ? Action définitive.')) return;
+      const ok = await dlgConfirm('Supprimer ce compte ?', 'Cette action est définitive et irréversible.', { type:'danger', okText:'Supprimer' });
+      if(!ok) return;
+      b.disabled=true;
       try{ await api('/users/'+b.dataset.deluser,{method:'DELETE'}); S.users=await api('/users'); renderView(); }
-      catch(err){ alert('Erreur : '+err.message); }
+      catch(err){ b.disabled=false; dlgError('Erreur', err.message); }
     }));
   }
 
