@@ -261,6 +261,31 @@
   </div>
 </div>
 
+<!-- ===================== 1er MOT DE PASSE (obligatoire) ===================== -->
+<div id="force-pw-screen" style="display:none;">
+  <div class="login-wrap">
+    <div class="login-form-side" style="width:100%;flex:1;">
+      <div class="login-box">
+        <div class="mark"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+        <h1>Nouveau mot de passe</h1>
+        <div class="lg-accent"></div>
+        <div class="sub">Pour la sécurité de ton compte, définis ton propre mot de passe avant de continuer.</div>
+        <form id="force-pw-form">
+          <div class="fld"><label>Nouveau mot de passe</label>
+            <span class="fico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+            <input type="password" id="force-pw-1" required minlength="4" autocomplete="new-password" placeholder="Au moins 4 caractères"></div>
+          <div class="fld"><label>Confirme le mot de passe</label>
+            <span class="fico"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+            <input type="password" id="force-pw-2" required minlength="4" autocomplete="new-password" placeholder="Retape le même mot de passe"></div>
+          <button type="submit" class="go" id="force-pw-btn">Valider mon mot de passe</button>
+          <div class="login-msg" id="force-pw-msg"></div>
+        </form>
+        <div class="login-foot">GAMServices Holding · Accès sécurisé</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===================== APP ===================== -->
 <div id="app">
   <div class="backdrop" id="backdrop"></div>
@@ -314,8 +339,9 @@
       h+='<span style="left:'+l+'%;bottom:-20px;width:'+s+'px;height:'+s+'px;background:'+c+';animation-duration:'+dur+'s;animation-delay:'+dl+'s;"></span>'; }
     box.innerHTML=h;
   }
-  function showLogin(){ $('login-screen').style.display='block'; $('app').style.display='none'; }
-  function showApp(){ $('login-screen').style.display='none'; $('app').style.display='block'; }
+  function showLogin(){ $('login-screen').style.display='block'; $('force-pw-screen').style.display='none'; $('app').style.display='none'; }
+  function showApp(){ $('login-screen').style.display='none'; $('force-pw-screen').style.display='none'; $('app').style.display='block'; }
+  function showForcePassword(){ $('login-screen').style.display='none'; $('app').style.display='none'; $('force-pw-screen').style.display='block'; }
   function shakeField(id){ const el=$(id).closest('.fld'); if(!el) return; el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
   function vibrate(p){ try{ if(navigator.vibrate) navigator.vibrate(p); }catch(e){} }
   let lockTimer=null;
@@ -348,12 +374,31 @@
           btn.disabled=false; btn.textContent='Se connecter'; return;
         }
         clientFails=0;
-        S.auth={token:d.token,user:d.user}; await startApp();
+        S.auth={token:d.token,user:d.user};
+        if(d.user.mustChangePassword){ showForcePassword(); }
+        else{ await startApp(); }
       }catch(err){ vibrate(200); shakeField('login-user'); shakeField('login-pass'); msg.textContent=err.message||'Erreur réseau'; btn.disabled=false; btn.textContent='Se connecter'; }
     });
     $('login-eye').addEventListener('click',()=>{ const p=$('login-pass'); p.type=(p.type==='password')?'text':'password'; });
     const caps=(e)=>{ const on=e.getModifierState&&e.getModifierState('CapsLock'); $('caps-warn').style.display=on?'block':'none'; };
     $('login-pass').addEventListener('keydown',caps); $('login-pass').addEventListener('keyup',caps); $('login-user').addEventListener('keyup',caps);
+  }
+  function setupForcePassword(){
+    $('force-pw-form').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg=$('force-pw-msg'); msg.textContent=''; msg.className='login-msg';
+      const p1=$('force-pw-1').value, p2=$('force-pw-2').value;
+      if(p1.length<4){ msg.textContent='Le mot de passe doit contenir au moins 4 caractères'; vibrate(130); return; }
+      if(p1!==p2){ msg.textContent='Les deux mots de passe ne correspondent pas'; vibrate([130,60,130]); return; }
+      const btn=$('force-pw-btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span>Enregistrement…';
+      try{
+        await api('/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({newPassword:p1})});
+        S.auth.user.mustChangePassword=false;
+        $('force-pw-form').reset();
+        btn.disabled=false; btn.textContent='Valider mon mot de passe';
+        await startApp();
+      }catch(err){ msg.textContent=err.message||'Erreur réseau'; btn.disabled=false; btn.textContent='Valider mon mot de passe'; vibrate(200); }
+    });
   }
   async function doLogout(expired){
     try{ if(!expired && S.auth) await fetch(API+'/logout',{method:'POST',headers:{'Authorization':'Bearer '+S.auth.token}}); }catch(e){}
@@ -461,15 +506,15 @@
         '<div class="field"><label>Prénoms</label><input name="prenoms" data-nm placeholder="Prénoms du master"></div>'+
         photoField('piece_recto','Pièce / permis — recto',1)+
         photoField('piece_verso','Pièce / permis — verso',1)+
-        '<div class="field"><label>Identifiant (connexion)</label><input name="username" required placeholder="ex : SD-050826"></div>'+
-        '<div class="field"><label>Mot de passe</label><input name="password" required placeholder="ex : master123"></div>'+
+        '<div class="field span2"><label>Identifiant (connexion)</label><input name="username" required placeholder="ex : SD-050826"></div>'+
+        '<div class="field span2" style="color:var(--ink-soft);font-size:12px;padding-top:2px">🔒 Mot de passe par défaut : <b>0000</b> — un nouveau mot de passe sera demandé à la 1ère connexion.</div>'+
       '</div>';
     }
     return '<div class="form-grid">'+
       '<div class="field"><label>Nom complet</label><input name="nom" required placeholder="ex : Yao Konan"></div>'+
       '<div class="field"><label>Contact</label><input name="contact" placeholder="ex : 07 00 00 00 00"></div>'+
-      '<div class="field"><label>Identifiant</label><input name="username" required placeholder="ex : yao"></div>'+
-      '<div class="field"><label>Mot de passe</label><input name="password" required placeholder="ex : yao123"></div>'+
+      '<div class="field span2"><label>Identifiant</label><input name="username" required placeholder="ex : yao"></div>'+
+      '<div class="field span2" style="color:var(--ink-soft);font-size:12px;padding-top:2px">🔒 Mot de passe par défaut : <b>0000</b> — un nouveau mot de passe sera demandé à la 1ère connexion.</div>'+
       (role==='SUPERVISEUR'?'':'<div class="field span2" style="color:var(--ink-soft);font-size:12px;padding-top:2px">Les champs détaillés du rôle '+roleLabel(role)+' arrivent bientôt.</div>')+
     '</div>';
   }
@@ -572,6 +617,7 @@
   function init(){
     $('today').textContent=new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
     setupLogin();
+    setupForcePassword();
     $('menu-toggle').addEventListener('click',toggleSidebar);
     $('backdrop').addEventListener('click',closeSidebar);
     $('overlay').addEventListener('click',e=>{ if(e.target===$('overlay')) closeModal(); });
