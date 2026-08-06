@@ -44,6 +44,11 @@ async function migrate() {
   // Infos de la personne rattachée au compte (équipe)
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nom TEXT`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS prenoms TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS code TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS piece_recto TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS piece_verso TEXT`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -178,14 +183,23 @@ app.post('/logout', wrap(async (req, res) => {
 
 /* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  // On exclut les images (photo, pièces) de la liste pour rester léger
   const r = await pool.query(
-    `SELECT id, username, role, nom, contact, actif, created_at
+    `SELECT id, username, role, nom, prenoms, contact, code, actif, created_at,
+            (photo IS NOT NULL) AS a_photo
      FROM users ORDER BY role, username`);
   res.json(r.rows);
 }));
 
+app.get('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+  if (!r.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
+  const u = r.rows[0]; delete u.pass_hash;
+  res.json(u);
+}));
+
 app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  const { username, password, role, nom, contact } = req.body;
+  const { username, password, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso } = req.body;
   if (!username || !password || !role)
     return res.status(400).json({ error: 'Identifiant, mot de passe et rôle sont obligatoires' });
   if (!['SUPERVISEUR', 'MASTER', 'COMMERCIAL', 'PDV'].includes(role))
@@ -193,9 +207,10 @@ app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const exists = await pool.query('SELECT 1 FROM users WHERE username=$1', [username]);
   if (exists.rows.length) return res.status(400).json({ error: 'Cet identifiant existe déjà' });
   const r = await pool.query(
-    `INSERT INTO users (username, pass_hash, role, nom, contact)
-     VALUES ($1,$2,$3,$4,$5) RETURNING id, username, role, nom, contact, actif`,
-    [username, hashPass(password), role, nom || null, contact || null]);
+    `INSERT INTO users (username, pass_hash, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, username, role, nom, prenoms, contact, code, actif`,
+    [username, hashPass(password), role, nom || null, prenoms || null, contact || null, code || null,
+     photo || null, piece_recto || null, piece_verso || null]);
   res.json(r.rows[0]);
 }));
 
