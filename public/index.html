@@ -172,6 +172,9 @@
   .modal-head .x{all:unset;cursor:pointer;font-size:18px;padding:2px 9px;border-radius:7px;}
   .modal-head .x:hover{background:rgba(255,255,255,.18);}
   .modal-body{padding:20px;}
+  .id-hero-wrap{text-align:center;margin-bottom:18px;}
+  .id-hero{width:140px;height:170px;object-fit:cover;border-radius:14px;border:1px solid var(--line);box-shadow:0 8px 20px rgba(20,33,74,.14);}
+  .det-photos-title{font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;margin:18px 0 10px;}
   .det-photos{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-start;}
   .det-photos figure{margin:0;text-align:center;}
   .det-photos img{width:150px;height:110px;object-fit:cover;border-radius:10px;border:1px solid var(--line);background:#fff;}
@@ -500,18 +503,23 @@
   async function openMember(id){
     try{ const u=await api('/users/'+id);
       const disp=[u.nom,u.prenoms].filter(Boolean).join(' ')||u.username;
-      let photos='';
-      if(u.photo) photos+='<figure><img class="idphoto" src="'+u.photo+'"><figcaption>Photo</figcaption></figure>';
-      if(u.piece_recto) photos+='<figure><img src="'+u.piece_recto+'"><figcaption>Pièce recto</figcaption></figure>';
-      if(u.piece_verso) photos+='<figure><img src="'+u.piece_verso+'"><figcaption>Pièce verso</figcaption></figure>';
+      const idPhoto = u.photo
+        ? '<div class="id-hero-wrap"><img class="id-hero" src="'+u.photo+'" alt="Photo d\'identité"></div>'
+        : '';
+      let pieces='';
+      if(u.piece_recto) pieces+='<figure><img src="'+u.piece_recto+'"><figcaption>Pièce / permis — recto</figcaption></figure>';
+      if(u.piece_verso) pieces+='<figure><img src="'+u.piece_verso+'"><figcaption>Pièce / permis — verso</figcaption></figure>';
       $('modal').innerHTML='<div class="modal-head"><h3>'+esc(disp)+'</h3><button class="x" data-close>✕</button></div>'+
-        '<div class="modal-body">'+(photos?'<div class="det-photos">'+photos+'</div>':'')+
-        '<dl class="dl"><dt>Rôle</dt><dd>'+rolePill(u.role)+'</dd>'+
-        (u.code?'<dt>Code</dt><dd>'+esc(u.code)+'</dd>':'')+
-        '<dt>Nom</dt><dd>'+esc(u.nom||'—')+'</dd>'+
-        (u.prenoms?'<dt>Prénoms</dt><dd>'+esc(u.prenoms)+'</dd>':'')+
-        '<dt>Contact</dt><dd>'+esc(u.contact||'—')+'</dd>'+
-        '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd></dl></div>';
+        '<div class="modal-body">'+
+        idPhoto+
+        '<dl class="dl">'+
+          '<dt>Nom</dt><dd>'+esc(u.nom||'—')+'</dd>'+
+          '<dt>Prénoms</dt><dd>'+esc(u.prenoms||'—')+'</dd>'+
+          '<dt>Contact</dt><dd>'+esc(u.contact||'—')+'</dd>'+
+          '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd>'+
+        '</dl>'+
+        (pieces?'<div class="det-photos-title">Pièce / permis</div><div class="det-photos">'+pieces+'</div>':'')+
+        '</div>';
       $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
       $('overlay').classList.add('open');
     }catch(err){ alert('Erreur : '+err.message); }
