@@ -158,6 +158,28 @@
   .link:hover{text-decoration:underline;text-underline-offset:2px;}
   .icon-btn{all:unset;cursor:pointer;font-size:15px;padding:5px 8px;border-radius:7px;color:var(--ink-faint);}
   .icon-btn:hover{background:var(--red-soft);color:var(--red);}
+  /* photo upload */
+  .photo-field{display:flex;align-items:center;gap:12px;border:1px dashed var(--line);border-radius:11px;padding:9px;background:var(--surface-2);}
+  .pvbox{width:60px;height:60px;border-radius:9px;border:1px solid var(--line);background:#fff center/cover no-repeat;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--ink-faint);font-size:22px;}
+  .pick{cursor:pointer;font-size:12.5px;font-weight:700;color:var(--brand);}
+  .pick:hover{text-decoration:underline;text-underline-offset:2px;}
+  /* modal */
+  .overlay{position:fixed;inset:0;background:rgba(16,26,51,.55);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:80;overflow-y:auto;}
+  .overlay.open{display:flex;}
+  .modal{background:var(--surface);border-radius:16px;max-width:560px;width:100%;box-shadow:0 24px 60px rgba(16,34,74,.3);overflow:hidden;}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:linear-gradient(120deg,var(--brand),var(--brand-2));color:#fff;}
+  .modal-head h3{margin:0;font-size:16px;font-weight:700;}
+  .modal-head .x{all:unset;cursor:pointer;font-size:18px;padding:2px 9px;border-radius:7px;}
+  .modal-head .x:hover{background:rgba(255,255,255,.18);}
+  .modal-body{padding:20px;}
+  .det-photos{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-start;}
+  .det-photos figure{margin:0;text-align:center;}
+  .det-photos img{width:150px;height:110px;object-fit:cover;border-radius:10px;border:1px solid var(--line);background:#fff;}
+  .det-photos .idphoto{width:110px;height:130px;}
+  .det-photos figcaption{font-size:10.5px;font-weight:700;color:var(--ink-faint);margin-top:5px;text-transform:uppercase;}
+  .dl{display:grid;grid-template-columns:130px 1fr;gap:9px 14px;font-size:13px;}
+  .dl dt{font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;padding-top:2px;}
+  .dl dd{margin:0;}
 
   /* ============ keyframes ============ */
   @keyframes auroraMove{from{transform:translate(0,0) rotate(0);}to{transform:translate(4%,3%) rotate(8deg);}}
@@ -255,6 +277,8 @@
     </div>
   </div>
 </div>
+
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -393,15 +417,10 @@
     const roleOpts='<option value="MASTER">Master</option><option value="COMMERCIAL">Commercial</option><option value="PDV">Point de vente</option><option value="SUPERVISEUR">Superviseur</option>';
     return `
       <div class="panel">
-        <div class="panel-head"><h3>Créer un compte</h3><span class="hint">Chaque compte donne accès à sa propre page</span></div>
+        <div class="panel-head"><h3>Créer un compte</h3><span class="hint">Chaque rôle a ses propres champs — chaque compte donne accès à sa page</span></div>
         <form data-form-user>
-          <div class="form-grid">
-            <div class="field"><label>Nom complet</label><input type="text" name="nom" placeholder="ex : Yao Konan" required></div>
-            <div class="field"><label>Contact</label><input type="text" name="contact" placeholder="ex : 07 00 00 00 00"></div>
-            <div class="field"><label>Rôle</label><select name="role" required>${roleOpts}</select></div>
-            <div class="field"><label>Identifiant</label><input type="text" name="username" placeholder="ex : yao" required></div>
-            <div class="field span2"><label>Mot de passe</label><input type="text" name="password" placeholder="ex : yao123" required></div>
-          </div>
+          <div class="form-grid"><div class="field span2"><label>Rôle du compte</label><select name="role" data-role required>${roleOpts}</select></div></div>
+          <div data-role-fields></div>
           <div class="msg" data-msg></div>
           <div class="form-actions"><button class="btn" type="submit">Créer le compte</button></div>
         </form>
@@ -409,30 +428,112 @@
       <div class="panel">
         <div class="panel-head"><h3>Comptes de l'équipe</h3><span class="hint">${users.length} compte(s)</span></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Nom</th><th>Identifiant</th><th>Rôle</th><th>Contact</th><th>Actions</th></tr></thead>
-          <tbody>${users.length?users.map(u=>`<tr>
-            <td><span class="av-ini">${esc(initials(u.nom||u.username))}</span>${esc(u.nom||'—')}</td>
+          <thead><tr><th>Membre</th><th>Code</th><th>Identifiant</th><th>Rôle</th><th>Contact</th><th>Actions</th></tr></thead>
+          <tbody>${users.length?users.map(u=>{ const disp=[u.nom,u.prenoms].filter(Boolean).join(' ')||'—'; return `<tr>
+            <td><span class="av-ini">${esc(initials(u.nom||u.username))}</span>${esc(disp)}</td>
+            <td>${esc(u.code||'—')}</td>
             <td><b>${esc(u.username)}</b></td>
             <td>${rolePill(u.role)}</td>
             <td>${esc(u.contact||'—')}</td>
-            <td><button class="link" data-reset="${u.id}" data-uname="${esc(u.username)}">Mot de passe</button>${u.username==='Superviseur'?'':' · <button class="icon-btn" data-deluser="'+u.id+'" title="Supprimer">🗑</button>'}</td>
-          </tr>`).join(''):'<tr class="empty-row"><td colspan="5">Aucun compte pour le moment — crée le premier ci-dessus</td></tr>'}</tbody>
+            <td><button class="link" data-viewuser="${u.id}">Voir</button> · <button class="link" data-reset="${u.id}" data-uname="${esc(u.username)}">Mot de passe</button>${u.username==='Superviseur'?'':' · <button class="icon-btn" data-deluser="'+u.id+'" title="Supprimer">🗑</button>'}</td>
+          </tr>`;}).join(''):'<tr class="empty-row"><td colspan="6">Aucun compte pour le moment — crée le premier ci-dessus</td></tr>'}</tbody>
         </table></div>
       </div>`;
   }
 
+  /* Champs selon le rôle */
+  function photoField(field,label,span){
+    return '<div class="field '+(span===1?'':'span2')+'"><label>'+label+'</label>'+
+      '<div class="photo-field"><div class="pvbox" data-slot="'+field+'">📷</div>'+
+      '<label class="pick">Choisir une image<input type="file" accept="image/*" data-photo="'+field+'" hidden></label></div></div>';
+  }
+  function fieldsForRole(role){
+    if(role==='MASTER'){
+      return '<div class="form-grid">'+
+        photoField('photo',"Photo d'identité (visage, coupé à la poitrine)")+
+        '<div class="field"><label>Code</label><input name="code" data-code placeholder="ex : SD-050826"></div>'+
+        '<div class="field"><label>Contact</label><input name="contact" placeholder="ex : 07 00 00 00 00"></div>'+
+        '<div class="field"><label>Nom</label><input name="nom" data-nm required placeholder="Nom du master"></div>'+
+        '<div class="field"><label>Prénoms</label><input name="prenoms" data-nm placeholder="Prénoms du master"></div>'+
+        photoField('piece_recto','Pièce / permis — recto',1)+
+        photoField('piece_verso','Pièce / permis — verso',1)+
+        '<div class="field"><label>Identifiant (connexion)</label><input name="username" required placeholder="ex : SD-050826"></div>'+
+        '<div class="field"><label>Mot de passe</label><input name="password" required placeholder="ex : master123"></div>'+
+      '</div>';
+    }
+    return '<div class="form-grid">'+
+      '<div class="field"><label>Nom complet</label><input name="nom" required placeholder="ex : Yao Konan"></div>'+
+      '<div class="field"><label>Contact</label><input name="contact" placeholder="ex : 07 00 00 00 00"></div>'+
+      '<div class="field"><label>Identifiant</label><input name="username" required placeholder="ex : yao"></div>'+
+      '<div class="field"><label>Mot de passe</label><input name="password" required placeholder="ex : yao123"></div>'+
+      (role==='SUPERVISEUR'?'':'<div class="field span2" style="color:var(--ink-soft);font-size:12px;padding-top:2px">Les champs détaillés du rôle '+roleLabel(role)+' arrivent bientôt.</div>')+
+    '</div>';
+  }
+
   /* ---------- HANDLERS ---------- */
+  let PHOTOS={};
+  function compressImage(file, cb){
+    const reader=new FileReader();
+    reader.onload=e=>{ const img=new Image(); img.onload=()=>{
+      const max=1000; let w=img.width,h=img.height;
+      if(w>max||h>max){ if(w>h){ h=Math.round(h*max/w); w=max; } else { w=Math.round(w*max/h); h=max; } }
+      const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h);
+      try{ cb(c.toDataURL('image/jpeg',0.72)); }catch(_){ cb(e.target.result); }
+    }; img.onerror=()=>cb(e.target.result); img.src=e.target.result; };
+    reader.readAsDataURL(file);
+  }
+  function wireRoleFields(uf){
+    uf.querySelectorAll('[data-photo]').forEach(inp=>inp.addEventListener('change',ev=>{
+      const f=ev.target.files&&ev.target.files[0]; if(!f) return; const field=inp.dataset.photo;
+      compressImage(f, b64=>{ PHOTOS[field]=b64; const box=uf.querySelector('[data-slot="'+field+'"]'); if(box){ box.textContent=''; box.style.backgroundImage='url('+b64+')'; } });
+    }));
+    const codeInp=uf.querySelector('[data-code]');
+    if(codeInp){ let edited=false; codeInp.addEventListener('input',()=>edited=true);
+      const gen=()=>{ if(edited) return; const nom=(uf.querySelector('[name=nom]')||{}).value||''; const pre=(uf.querySelector('[name=prenoms]')||{}).value||'';
+        const ini=(((nom.trim()[0]||'')+(pre.trim()[0]||''))||'').toUpperCase(); const d=new Date();
+        const dd=String(d.getDate()).padStart(2,'0'),mm=String(d.getMonth()+1).padStart(2,'0'),yy=String(d.getFullYear()).slice(-2);
+        codeInp.value=(ini||'XX')+'-'+dd+mm+yy; };
+      uf.querySelectorAll('[data-nm]').forEach(i=>i.addEventListener('input',gen)); gen();
+    }
+  }
+  function closeModal(){ $('overlay').classList.remove('open'); }
+  async function openMember(id){
+    try{ const u=await api('/users/'+id);
+      const disp=[u.nom,u.prenoms].filter(Boolean).join(' ')||u.username;
+      let photos='';
+      if(u.photo) photos+='<figure><img class="idphoto" src="'+u.photo+'"><figcaption>Photo</figcaption></figure>';
+      if(u.piece_recto) photos+='<figure><img src="'+u.piece_recto+'"><figcaption>Pièce recto</figcaption></figure>';
+      if(u.piece_verso) photos+='<figure><img src="'+u.piece_verso+'"><figcaption>Pièce verso</figcaption></figure>';
+      $('modal').innerHTML='<div class="modal-head"><h3>'+esc(disp)+'</h3><button class="x" data-close>✕</button></div>'+
+        '<div class="modal-body">'+(photos?'<div class="det-photos">'+photos+'</div>':'')+
+        '<dl class="dl"><dt>Rôle</dt><dd>'+rolePill(u.role)+'</dd>'+
+        (u.code?'<dt>Code</dt><dd>'+esc(u.code)+'</dd>':'')+
+        '<dt>Nom</dt><dd>'+esc(u.nom||'—')+'</dd>'+
+        (u.prenoms?'<dt>Prénoms</dt><dd>'+esc(u.prenoms)+'</dd>':'')+
+        '<dt>Contact</dt><dd>'+esc(u.contact||'—')+'</dd>'+
+        '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd></dl></div>';
+      $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
+      $('overlay').classList.add('open');
+    }catch(err){ alert('Erreur : '+err.message); }
+  }
+
   function attachHandlers(){
     document.querySelectorAll('[data-goto]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.goto)));
     const uf=document.querySelector('form[data-form-user]');
-    if(uf){ uf.addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const msg=uf.querySelector('[data-msg]'); msg.textContent='Création…'; msg.className='msg';
-      const d=Object.fromEntries(new FormData(uf).entries());
-      try{ await api('/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-        msg.textContent='✔ Compte créé'; msg.className='msg ok'; S.users=await api('/users'); renderView();
-      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
-    }); }
+    if(uf){
+      const roleSel=uf.querySelector('[data-role]'); const cont=uf.querySelector('[data-role-fields]');
+      const renderFields=()=>{ PHOTOS={}; cont.innerHTML=fieldsForRole(roleSel.value); wireRoleFields(uf); };
+      roleSel.addEventListener('change',renderFields); renderFields();
+      uf.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const msg=uf.querySelector('[data-msg]'); msg.textContent='Création…'; msg.className='msg';
+        const d=Object.fromEntries(new FormData(uf).entries()); Object.assign(d, PHOTOS);
+        try{ await api('/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+          msg.textContent='✔ Compte créé avec succès'; msg.className='msg ok'; PHOTOS={}; S.users=await api('/users'); renderView();
+        }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
+      });
+    }
+    document.querySelectorAll('[data-viewuser]').forEach(b=>b.addEventListener('click',()=>openMember(b.dataset.viewuser)));
     document.querySelectorAll('[data-reset]').forEach(b=>b.addEventListener('click', async ()=>{
       const pw=prompt('Nouveau mot de passe pour '+b.dataset.uname+' :'); if(!pw) return;
       try{ await api('/users/'+b.dataset.reset+'/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})}); alert('Mot de passe mis à jour ✔'); }
@@ -464,6 +565,7 @@
     setupLogin();
     $('menu-toggle').addEventListener('click',toggleSidebar);
     $('backdrop').addEventListener('click',closeSidebar);
+    $('overlay').addEventListener('click',e=>{ if(e.target===$('overlay')) closeModal(); });
     showLogin();
     // PWA : installation "vraie application"
     if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{})); }
