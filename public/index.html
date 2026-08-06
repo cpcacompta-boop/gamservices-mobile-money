@@ -139,6 +139,7 @@
   .pill{display:inline-block;padding:3px 11px;border-radius:20px;font-size:11.5px;font-weight:700;}
   .pill.sup{background:#EDE7F6;color:#5B3E9A;} .pill.master{background:var(--pos-soft);color:var(--pos);}
   .pill.com{background:#E4ECFB;color:var(--brand);} .pill.pdv{background:var(--warn-soft);color:var(--warn);}
+  .loc-fresh{display:inline-block;margin-left:6px;color:var(--pos);font-size:10.5px;font-weight:700;}
   .av-ini{width:30px;height:30px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:var(--ink-soft);margin-right:9px;vertical-align:middle;}
 
   /* Forms + buttons */
@@ -314,6 +315,10 @@
   const API = '';
   let S = { auth:null, view:'dashboard', users:[] };
   let deferredPrompt=null;
+  let LIVE=null;            // connexion WebSocket temps réel
+  let liveRetryTimer=null;
+  let geoWatchId=null;      // suivi GPS de l'agent (Master/Commercial/PDV)
+  let lastLocSent=0;
   window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); deferredPrompt=e; const b=document.getElementById('install-btn'); if(b) b.style.display='inline-block'; });
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -401,6 +406,7 @@
     });
   }
   async function doLogout(expired){
+    disconnectLive(); stopLocationTracking();
     try{ if(!expired && S.auth) await fetch(API+'/logout',{method:'POST',headers:{'Authorization':'Bearer '+S.auth.token}}); }catch(e){}
     S.auth=null; showLogin(); closeSidebar();
     clearInterval(lockTimer); $('lock-box').style.display='none';
@@ -477,15 +483,19 @@
       <div class="panel">
         <div class="panel-head"><h3>Comptes de l'équipe</h3><span class="hint">${users.length} compte(s)</span></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Membre</th><th>Code</th><th>Identifiant</th><th>Rôle</th><th>Contact</th><th>Actions</th></tr></thead>
-          <tbody>${users.length?users.map(u=>{ const disp=[u.nom,u.prenoms].filter(Boolean).join(' ')||'—'; return `<tr>
+          <thead><tr><th>Membre</th><th>Code</th><th>Identifiant</th><th>Rôle</th><th>Contact</th><th>Statut</th><th>Position</th><th>Actions</th></tr></thead>
+          <tbody>${users.length?users.map(u=>{ const disp=[u.nom,u.prenoms].filter(Boolean).join(' ')||'—'; const isSup=u.username==='Superviseur';
+            const statut = u.actif===false ? '<span class="pill" style="background:var(--red-soft);color:var(--red)">Bloqué</span>' : '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Actif</span>';
+            return `<tr>
             <td><span class="av-ini">${esc(initials(u.nom||u.username))}</span>${esc(disp)}</td>
             <td>${esc(u.code||'—')}</td>
             <td><b>${esc(u.username)}</b></td>
             <td>${rolePill(u.role)}</td>
             <td>${esc(u.contact||'—')}</td>
-            <td><button class="link" data-viewuser="${u.id}">Voir</button> · <button class="link" data-reset="${u.id}" data-uname="${esc(u.username)}">Mot de passe</button>${u.username==='Superviseur'?'':' · <button class="icon-btn" data-deluser="'+u.id+'" title="Supprimer">🗑</button>'}</td>
-          </tr>`;}).join(''):'<tr class="empty-row"><td colspan="6">Aucun compte pour le moment — crée le premier ci-dessus</td></tr>'}</tbody>
+            <td>${statut}</td>
+            <td style="font-size:11.5px" data-loc-live="${u.id}">${mapLink(u.lat,u.lng)}${u.loc_updated_at?'<div style="color:var(--ink-faint);margin-top:2px">'+timeAgo(u.loc_updated_at)+'</div>':''}</td>
+            <td><button class="link" data-viewuser="${u.id}">Voir</button> · <button class="link" data-edituser="${u.id}">Modifier</button> · <button class="link" data-reset="${u.id}" data-uname="${esc(u.username)}">Mot de passe</button>${isSup?'':' · <button class="link" data-block="'+u.id+'" data-blocked="'+(u.actif===false?'1':'0')+'" data-uname="'+esc(u.username)+'" style="color:'+(u.actif===false?'var(--pos)':'var(--red)')+'">'+(u.actif===false?'Débloquer':'Bloquer')+'</button> · <button class="icon-btn" data-deluser="'+u.id+'" title="Supprimer">🗑</button>'}</td>
+          </tr>`;}).join(''):'<tr class="empty-row"><td colspan="8">Aucun compte pour le moment — crée le premier ci-dessus</td></tr>'}</tbody>
         </table></div>
       </div>`;
   }
@@ -537,7 +547,7 @@
       compressImage(f, b64=>{ PHOTOS[field]=b64; const box=uf.querySelector('[data-slot="'+field+'"]'); if(box){ box.textContent=''; box.style.backgroundImage='url('+b64+')'; } });
     }));
     const codeInp=uf.querySelector('[data-code]');
-    if(codeInp){ let edited=false; codeInp.addEventListener('input',()=>edited=true);
+    if(codeInp){ let edited=!!codeInp.value; codeInp.addEventListener('input',()=>edited=true);
       const gen=()=>{ if(edited) return; const nom=(uf.querySelector('[name=nom]')||{}).value||''; const pre=(uf.querySelector('[name=prenoms]')||{}).value||'';
         const ini=(((nom.trim()[0]||'')+(pre.trim()[0]||''))||'').toUpperCase(); const d=new Date();
         const dd=String(d.getDate()).padStart(2,'0'),mm=String(d.getMonth()+1).padStart(2,'0'),yy=String(d.getFullYear()).slice(-2);
@@ -563,10 +573,60 @@
           '<dt>Prénoms</dt><dd>'+esc(u.prenoms||'—')+'</dd>'+
           '<dt>Contact</dt><dd>'+esc(u.contact||'—')+'</dd>'+
           '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd>'+
+          '<dt>Statut</dt><dd>'+(u.actif===false?'<span class="pill" style="background:var(--red-soft);color:var(--red)">Bloqué</span>':'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Actif</span>')+'</dd>'+
+          '<dt>Position</dt><dd data-loc-live="'+u.id+'">'+mapLink(u.lat,u.lng)+(u.loc_updated_at?' <span style="color:var(--ink-faint);font-size:11.5px">('+timeAgo(u.loc_updated_at)+')</span>':'')+'</dd>'+
         '</dl>'+
         (pieces?'<div class="det-photos-title">Pièce / permis</div><div class="det-photos">'+pieces+'</div>':'')+
         '</div>';
       $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
+      $('overlay').classList.add('open');
+    }catch(err){ alert('Erreur : '+err.message); }
+  }
+
+  /* ---------- MODIFIER UN COMPTE ---------- */
+  async function openEditUser(id){
+    try{
+      const u=await api('/users/'+id);
+      const roleOpts=['MASTER','COMMERCIAL','PDV','SUPERVISEUR'].map(r=>'<option value="'+r+'"'+(r===u.role?' selected':'')+'>'+roleLabel(r)+'</option>').join('');
+      const isSup = u.username==='Superviseur';
+      $('modal').innerHTML='<div class="modal-head"><h3>Modifier — '+esc(u.username)+'</h3><button class="x" data-close>✕</button></div>'+
+        '<div class="modal-body" style="text-align:left">'+
+        '<form data-form-edituser>'+
+          '<div class="form-grid">'+
+            '<div class="field span2"><label>Rôle du compte</label><select name="role"'+(isSup?' disabled':'')+'>'+roleOpts+'</select></div>'+
+            photoField('photo',"Photo d'identité")+
+            '<div class="field"><label>Code</label><input name="code" value="'+esc(u.code||'')+'"></div>'+
+            '<div class="field"><label>Contact</label><input name="contact" value="'+esc(u.contact||'')+'"></div>'+
+            '<div class="field"><label>Nom</label><input name="nom" value="'+esc(u.nom||'')+'"></div>'+
+            '<div class="field"><label>Prénoms</label><input name="prenoms" value="'+esc(u.prenoms||'')+'"></div>'+
+            photoField('piece_recto','Pièce / permis — recto',1)+
+            photoField('piece_verso','Pièce / permis — verso',1)+
+          '</div>'+
+          '<div class="msg" data-msg></div>'+
+          '<div class="form-actions"><button class="btn" type="submit">Enregistrer les modifications</button></div>'+
+        '</form>'+
+        '</div>';
+      const box=$('modal');
+      box.querySelector('[data-close]').addEventListener('click',closeModal);
+      const ef=box.querySelector('form[data-form-edituser]');
+      PHOTOS={};
+      wireRoleFields(ef); // branche l'upload photo + génération de code (n'écrase pas la valeur déjà tapée)
+      // pré-affiche les photos déjà enregistrées
+      [['photo',u.photo],['piece_recto',u.piece_recto],['piece_verso',u.piece_verso]].forEach(([field,val])=>{
+        if(!val) return; const box2=ef.querySelector('[data-slot="'+field+'"]'); if(box2){ box2.textContent=''; box2.style.backgroundImage='url('+val+')'; }
+      });
+      ef.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const msg=ef.querySelector('[data-msg]'); msg.textContent='Enregistrement…'; msg.className='msg';
+        const d=Object.fromEntries(new FormData(ef).entries()); Object.assign(d, PHOTOS);
+        if(isSup) delete d.role;
+        try{
+          await api('/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+          msg.textContent='✔ Modifications enregistrées'; msg.className='msg ok';
+          S.users=await api('/users'); if(S.view==='equipe') renderView();
+          setTimeout(closeModal,600);
+        }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
+      });
       $('overlay').classList.add('open');
     }catch(err){ alert('Erreur : '+err.message); }
   }
@@ -588,6 +648,19 @@
       });
     }
     document.querySelectorAll('[data-viewuser]').forEach(b=>b.addEventListener('click',()=>openMember(b.dataset.viewuser)));
+    document.querySelectorAll('[data-edituser]').forEach(b=>b.addEventListener('click',()=>openEditUser(b.dataset.edituser)));
+    document.querySelectorAll('[data-block]').forEach(b=>b.addEventListener('click', async ()=>{
+      const willBlock = b.dataset.blocked==='0';
+      const label = willBlock?'Bloquer':'Débloquer';
+      if(!confirm(label+' le compte de '+b.dataset.uname+' ?'+(willBlock?' Il sera déconnecté immédiatement, même en pleine utilisation.':''))) return;
+      const orig=b.textContent; b.textContent='…'; b.disabled=true;
+      try{
+        const r=await api('/users/'+b.dataset.block+'/'+(willBlock?'block':'unblock'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+        S.users=await api('/users');
+        renderView();
+        if(willBlock) alert(r.liveDisconnect? '✔ Compte bloqué — déconnexion immédiate effectuée.' : '✔ Compte bloqué (il était hors ligne, le blocage s\'appliquera à sa prochaine action).');
+      }catch(err){ b.textContent=orig; b.disabled=false; alert('Erreur : '+err.message); }
+    }));
     document.querySelectorAll('[data-reset]').forEach(b=>b.addEventListener('click', async ()=>{
       const pw=prompt('Nouveau mot de passe pour '+b.dataset.uname+' :'); if(!pw) return;
       try{ await api('/users/'+b.dataset.reset+'/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})}); alert('Mot de passe mis à jour ✔'); }
@@ -600,6 +673,63 @@
     }));
   }
 
+  /* ---------- TEMPS RÉEL (WebSocket) ---------- */
+  // Blocage/déblocage/modification poussés instantanément par le superviseur,
+  // + réception en direct des positions des agents. Fonctionne même pendant
+  // que la personne utilise l'application (pas besoin de recharger la page).
+  function connectLive(){
+    if(!S.auth) return;
+    try{ if(LIVE) LIVE.close(); }catch(e){}
+    const proto=(location.protocol==='https:')?'wss:':'ws:';
+    LIVE=new WebSocket(proto+'//'+location.host+'/ws?token='+encodeURIComponent(S.auth.token));
+    LIVE.onmessage=(ev)=>{
+      let d; try{ d=JSON.parse(ev.data); }catch(e){ return; }
+      if(d.type==='blocked'){
+        vibrate([120,60,120,60,220]);
+        stopLocationTracking();
+        try{ LIVE.close(); }catch(e){}
+        S.auth=null; showLogin(); closeSidebar();
+        $('login-msg').textContent='Ton compte a été bloqué par le superviseur.';
+      } else if(d.type==='profile_updated'){
+        if(S.auth && d.user && d.user.id===S.auth.user.id){
+          Object.assign(S.auth.user, d.user);
+          const u=S.auth.user;
+          const nmEl=document.querySelector('#side-user .nm'); if(nmEl) nmEl.textContent=u.nom||u.username;
+        }
+        if(S.view==='equipe'){ S.users=S.users.map(u=>u.id==d.user.id?Object.assign({},u,d.user):u); renderView(); }
+      } else if(d.type==='location'){
+        if(S.auth && S.auth.user.role==='SUPERVISEUR'){
+          if(Array.isArray(S.dashUsers)) S.dashUsers=S.dashUsers.map(u=>u.id==d.userId?Object.assign({},u,{lat:d.lat,lng:d.lng,loc_updated_at:d.at}):u);
+          if(Array.isArray(S.users)) S.users=S.users.map(u=>u.id==d.userId?Object.assign({},u,{lat:d.lat,lng:d.lng,loc_updated_at:d.at}):u);
+          const badge=document.querySelector('[data-loc-live="'+d.userId+'"]');
+          if(badge) badge.innerHTML=mapLink(d.lat,d.lng)+'<span class="loc-fresh">● en direct</span>';
+        }
+      }
+    };
+    LIVE.onclose=()=>{ clearTimeout(liveRetryTimer); if(S.auth) liveRetryTimer=setTimeout(connectLive,3000); };
+    LIVE.onerror=()=>{ try{ LIVE.close(); }catch(e){} };
+  }
+  function disconnectLive(){ clearTimeout(liveRetryTimer); liveRetryTimer=null; try{ if(LIVE) LIVE.close(); }catch(e){} LIVE=null; }
+
+  /* ---------- GÉOLOCALISATION LIVE (Master / Commercial / PDV) ---------- */
+  function startLocationTracking(){
+    if(!('geolocation' in navigator)) return;
+    if(geoWatchId!==null) return;
+    geoWatchId=navigator.geolocation.watchPosition(
+      (pos)=>{
+        const now=Date.now(); if(now-lastLocSent<8000) return; // throttle : max 1 envoi / 8s
+        lastLocSent=now;
+        api('/location',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({lat:pos.coords.latitude,lng:pos.coords.longitude,accuracy:pos.coords.accuracy})}).catch(()=>{});
+      },
+      ()=>{ /* position refusée ou indisponible : on n'insiste pas */ },
+      { enableHighAccuracy:true, maximumAge:5000, timeout:15000 }
+    );
+  }
+  function stopLocationTracking(){ if(geoWatchId!==null){ try{ navigator.geolocation.clearWatch(geoWatchId); }catch(e){} geoWatchId=null; } }
+  function mapLink(lat,lng){ if(lat==null||lng==null) return '<span style="color:var(--ink-faint)">Position inconnue</span>'; return '<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+lat+','+lng+'">'+lat.toFixed(5)+', '+lng.toFixed(5)+' — voir sur la carte</a>'; }
+  function timeAgo(iso){ if(!iso) return '—'; const s=Math.floor((Date.now()-new Date(iso).getTime())/1000); if(s<60) return 'à l\'instant'; if(s<3600) return 'il y a '+Math.floor(s/60)+' min'; if(s<86400) return 'il y a '+Math.floor(s/3600)+' h'; return 'il y a '+Math.floor(s/86400)+' j'; }
+
   /* ---------- START ---------- */
   async function startApp(){
     showApp();
@@ -610,6 +740,8 @@
     $('side-logout').addEventListener('click',()=>doLogout(false));
     // données dashboard (superviseur)
     if(u.role==='SUPERVISEUR'){ try{ S.dashUsers=await api('/users'); }catch(e){ S.dashUsers=[]; } }
+    connectLive();
+    if(u.role!=='SUPERVISEUR') startLocationTracking(); // l'agent partage sa position en tâche de fond
     S.view='dashboard';
     await setView('dashboard');
   }
