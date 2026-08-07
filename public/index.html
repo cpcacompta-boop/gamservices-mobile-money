@@ -663,6 +663,11 @@
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
       </div>
+      <div class="panel" style="background:var(--warn-soft);border:1px dashed var(--warn)">
+        <div style="padding:12px 20px;color:var(--warn);font-size:11px;line-height:1.6">
+          🔒 Seul le <b>superviseur</b> peut créditer ton fonds en UV et en FCFA. Si ton solde UV est insuffisant pour honorer une recharge, contacte-le.
+        </div>
+      </div>
       <div class="panel">
         <div class="panel-head"><h3>Nouvelle recharge</h3><span class="hint">Le PDV t'appelle → tu enregistres la vente d'UV</span></div>
         <form data-form-recharge>
