@@ -444,7 +444,37 @@ app.get('/users/:id/recharges', requireRole('SUPERVISEUR'), wrap(async (req, res
 
 /* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
 // Vue d'ensemble des fonds de tous les Masters (page dédiée superviseur)
-app.get('/masters/overview', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+// Statistiques globales (légères) — jamais besoin de charger tous les Masters pour ça
+app.get('/masters/stats', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(`
+    SELECT COUNT(*) AS count,
+      COALESCE(SUM(u.solde_uv), 0) AS total_uv,
+      COALESCE(SUM(u.solde_fcfa), 0) AS total_fcfa,
+      (SELECT COUNT(*) FROM uv_recharges rc JOIN users m ON m.id=rc.master_id WHERE m.role='MASTER' AND rc.statut='EN_ATTENTE') AS total_en_attente,
+      (SELECT COUNT(*) FROM uv_recharges rc JOIN users m ON m.id=rc.master_id WHERE m.role='MASTER' AND rc.statut='EN_ATTENTE' AND rc.created_at < date_trunc('day', now())) AS total_en_retard
+    FROM users u WHERE u.role='MASTER'`);
+  res.json(r.rows[0]);
+}));
+
+// Recherche de Masters par nom/prénom/identifiant — pagination légère (20 résultats max), jamais de liste complète
+app.get('/masters/search', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  let r;
+  if (q) {
+    r = await pool.query(
+      `SELECT id, username, nom, prenoms FROM users
+       WHERE role='MASTER' AND actif=TRUE AND (nom ILIKE $1 OR prenoms ILIKE $1 OR username ILIKE $1)
+       ORDER BY nom NULLS LAST, prenoms NULLS LAST, username LIMIT 20`, ['%' + q + '%']);
+  } else {
+    r = await pool.query(
+      `SELECT id, username, nom, prenoms FROM users WHERE role='MASTER' AND actif=TRUE
+       ORDER BY nom NULLS LAST, prenoms NULLS LAST, username LIMIT 20`);
+  }
+  res.json(r.rows);
+}));
+
+// Fiche fonds détaillée d'UN Master (chargée uniquement quand le superviseur le sélectionne)
+app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const r = await pool.query(`
     SELECT u.id, u.username, u.nom, u.prenoms, u.contact, u.solde_uv, u.solde_fcfa,
       COUNT(rc.id) FILTER (WHERE rc.statut='EN_ATTENTE') AS en_attente,
@@ -453,10 +483,10 @@ app.get('/masters/overview', requireRole('SUPERVISEUR'), wrap(async (req, res) =
       MAX(rc.created_at) AS derniere_recharge
     FROM users u
     LEFT JOIN uv_recharges rc ON rc.master_id = u.id
-    WHERE u.role='MASTER'
-    GROUP BY u.id
-    ORDER BY u.nom NULLS LAST, u.prenoms NULLS LAST, u.username`);
-  res.json(r.rows);
+    WHERE u.id=$1 AND u.role='MASTER'
+    GROUP BY u.id`, [req.params.id]);
+  if (!r.rows.length) return res.status(404).json({ error: 'Master introuvable' });
+  res.json(r.rows[0]);
 }));
 
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
