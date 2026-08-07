@@ -36,6 +36,22 @@ function sendToUser(userId, obj){ wsClients.forEach(ws=>{ if(ws.userId === Numbe
 function broadcastToSupervisors(obj){ wsClients.forEach(ws=>{ if(ws.role === 'SUPERVISEUR') wsSend(ws, obj); }); }
 function kickUser(userId){ wsClients.forEach(ws=>{ if(ws.userId === Number(userId)){ wsSend(ws, { type:'blocked' }); try{ ws.close(); }catch(e){} } }); }
 
+// Vérifie les recharges UV encaissées en attente depuis un jour précédent (paiement "oublié")
+// -> alerte le Master + le superviseur, la recharge RESTE en attente (aucune fermeture automatique)
+async function checkOverdueRecharges() {
+  try {
+    const r = await pool.query(
+      `SELECT rc.*, m.username AS master_username FROM uv_recharges rc
+       JOIN users m ON m.id = rc.master_id
+       WHERE rc.statut='EN_ATTENTE' AND rc.alert_sent=FALSE AND rc.created_at < date_trunc('day', now())`);
+    for (const rc of r.rows) {
+      sendToUser(rc.master_id, { type: 'recharge_alert', recharge: rc });
+      broadcastToSupervisors({ type: 'recharge_alert', recharge: rc });
+      await pool.query('UPDATE uv_recharges SET alert_sent=TRUE WHERE id=$1', [rc.id]);
+    }
+  } catch (e) { console.error('Verification recharges en retard :', e.message); }
+}
+
 /* =====================================================================
    MIGRATION AUTOMATIQUE (aucun SQL à lancer à la main)
    ===================================================================== */
@@ -103,6 +119,30 @@ async function migrate() {
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
+  /* ---- Fonds UV / FCFA du Master (crédité manuellement par le superviseur) ---- */
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS solde_uv NUMERIC NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS solde_fcfa NUMERIC NOT NULL DEFAULT 0`);
+  // Historique des crédits accordés par le superviseur à un Master
+  await pool.query(`CREATE TABLE IF NOT EXISTS fund_credits (
+    id SERIAL PRIMARY KEY,
+    master_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    uv NUMERIC NOT NULL DEFAULT 0,
+    fcfa NUMERIC NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`);
+  // Chaque recharge/vente d'UV qu'un Master fait à un PDV. "EN_ATTENTE" tant que le PDV n'a pas payé.
+  await pool.query(`CREATE TABLE IF NOT EXISTS uv_recharges (
+    id SERIAL PRIMARY KEY,
+    master_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    pdv_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    montant_uv NUMERIC NOT NULL,
+    montant_fcfa NUMERIC NOT NULL DEFAULT 0,
+    statut TEXT NOT NULL DEFAULT 'EN_ATTENTE',
+    alert_sent BOOLEAN DEFAULT FALSE,
+    paid_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS uv_recharges_master ON uv_recharges(master_id, created_at DESC)`);
   await seedSuperviseur();
   console.log('\u2714 Migration terminee : base a jour.');
 }
@@ -296,12 +336,119 @@ app.delete('/zones/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* =====================================================================
+   FONDS & RECHARGES UV — LOGIQUE MÉTIER "MASTER"
+   Un Master vend/recharge des UV à n'importe quel PDV (peu importe zone/quartier).
+   Le PDV appelle le Master au téléphone ; le Master enregistre la recharge :
+     - son solde UV diminue immédiatement
+     - le PDV paie tout de suite OU plus tard dans la même journée
+     - si payé plus tard : la recharge reste "EN_ATTENTE" jusqu'au règlement,
+       et si elle n'est toujours pas payée le jour suivant, une alerte part
+       (le Master ET le superviseur sont notifiés en direct) — sans jamais
+       se fermer toute seule : elle reste en attente jusqu'au paiement réel.
+   Le fonds de départ du Master (UV et FCFA) est crédité manuellement par
+   le superviseur (aucune génération automatique de fonds).
+   ===================================================================== */
+const numOrNaN = (v) => { const n = Number(v); return isFinite(n) ? n : NaN; };
+
+// Le Master consulte son propre fonds (solde UV disponible, solde FCFA encaissé)
+app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [req.user.id]);
+  res.json(r.rows[0] || { solde_uv: 0, solde_fcfa: 0 });
+}));
+
+// Liste des PDV disponibles pour une recharge (aucune restriction de zone/quartier)
+app.get('/pdvs', requireRole('MASTER', 'SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT id, username, nom_commercial, ville, quartier FROM users
+     WHERE role='PDV' AND actif=TRUE ORDER BY nom_commercial NULLS LAST, username`);
+  res.json(r.rows);
+}));
+
+// Historique des recharges effectuées par le Master connecté
+app.get('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT rc.*, u.nom_commercial, u.username AS pdv_username
+     FROM uv_recharges rc JOIN users u ON u.id = rc.pdv_id
+     WHERE rc.master_id=$1 ORDER BY rc.created_at DESC LIMIT 300`, [req.user.id]);
+  res.json(r.rows);
+}));
+
+// Le Master enregistre une vente/recharge d'UV à un PDV (suite à son appel téléphonique)
+app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
+  const pdvId = Number(req.body.pdv_id);
+  const uv = numOrNaN(req.body.montant_uv);
+  const fcfa = req.body.montant_fcfa != null && req.body.montant_fcfa !== '' ? numOrNaN(req.body.montant_fcfa) : 0;
+  const paidNow = !!req.body.paid_now;
+  if (!pdvId || !(uv > 0)) return res.status(400).json({ error: 'Le point de vente et le montant en UV sont obligatoires' });
+  if (!(fcfa >= 0)) return res.status(400).json({ error: 'Montant en FCFA invalide' });
+
+  const pdv = await pool.query("SELECT id FROM users WHERE id=$1 AND role='PDV' AND actif=TRUE", [pdvId]);
+  if (!pdv.rows.length) return res.status(404).json({ error: 'Point de vente introuvable' });
+
+  const m = await pool.query('SELECT solde_uv FROM users WHERE id=$1', [req.user.id]);
+  const soldeUv = Number(m.rows[0].solde_uv || 0);
+  if (soldeUv < uv) return res.status(400).json({ error: 'Fonds UV insuffisant (solde disponible : ' + soldeUv + ')' });
+
+  const statut = paidNow ? 'PAYE' : 'EN_ATTENTE';
+  const r = await pool.query(
+    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, paid_at)
+     VALUES ($1,$2,$3,$4,$5,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
+    [req.user.id, pdvId, uv, fcfa, statut]);
+
+  const fund = paidNow
+    ? await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa', [uv, fcfa, req.user.id])
+    : await pool.query('UPDATE users SET solde_uv=solde_uv-$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [uv, req.user.id]);
+
+  broadcastToSupervisors({ type: 'recharge_created', masterId: req.user.id, recharge: r.rows[0] });
+  res.json({ ok: true, recharge: r.rows[0], fund: fund.rows[0] });
+}));
+
+// Le Master encaisse le règlement d'une recharge restée en attente (paiement différé le même jour, ou plus tard)
+app.post('/master/recharges/:id/pay', requireRole('MASTER'), wrap(async (req, res) => {
+  const rc = await pool.query('SELECT * FROM uv_recharges WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
+  if (!rc.rows.length) return res.status(404).json({ error: 'Recharge introuvable' });
+  if (rc.rows[0].statut === 'PAYE') return res.json({ ok: true, already: true });
+  await pool.query("UPDATE uv_recharges SET statut='PAYE', paid_at=now() WHERE id=$1", [req.params.id]);
+  const fund = await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa',
+    [rc.rows[0].montant_fcfa, req.user.id]);
+  broadcastToSupervisors({ type: 'recharge_paid', masterId: req.user.id, id: Number(req.params.id) });
+  res.json({ ok: true, fund: fund.rows[0] });
+}));
+
+/* ---- Supervision des fonds Master (SUPERVISEUR uniquement) ---- */
+
+// Le superviseur crédite manuellement le fonds (UV et/ou FCFA) d'un Master
+app.post('/users/:id/credit', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const uv = numOrNaN(req.body.uv) || 0;
+  const fcfa = numOrNaN(req.body.fcfa) || 0;
+  if (!(uv > 0) && !(fcfa > 0)) return res.status(400).json({ error: 'Indique un montant en UV et/ou en FCFA' });
+  const t = await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id]);
+  if (!t.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
+  if (t.rows[0].role !== 'MASTER') return res.status(400).json({ error: 'Seul un compte Master peut être crédité en UV/FCFA' });
+  const r = await pool.query('UPDATE users SET solde_uv=solde_uv+$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
+    [uv, fcfa, req.params.id]);
+  await pool.query('INSERT INTO fund_credits (master_id, uv, fcfa) VALUES ($1,$2,$3)', [req.params.id, uv, fcfa]);
+  sendToUser(req.params.id, { type: 'fund_credited', fund: r.rows[0], uv, fcfa });
+  res.json({ ok: true, fund: r.rows[0] });
+}));
+
+// Le superviseur consulte l'historique des recharges d'un Master donné
+app.get('/users/:id/recharges', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT rc.*, u.nom_commercial, u.username AS pdv_username
+     FROM uv_recharges rc JOIN users u ON u.id = rc.pdv_id
+     WHERE rc.master_id=$1 ORDER BY rc.created_at DESC LIMIT 300`, [req.params.id]);
+  res.json(r.rows);
+}));
+
 /* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   // On exclut les images (photo, pièces) de la liste pour rester léger
   const baseCols = `id, username, role, nom, prenoms, contact, code, actif, created_at,
             last_lat AS lat, last_lng AS lng, loc_updated_at,
             nom_commercial, ville, quartier, zone, contact_responsable, contact_gerant,
+            solde_uv, solde_fcfa,
             (photo IS NOT NULL) AS a_photo`;
   try {
     const r = await pool.query(
@@ -449,7 +596,11 @@ setInterval(() => {
 }, 30000);
 
 migrate()
-  .then(() => server.listen(PORT, () => console.log('\u2714 GAMServices demarre (HTTP + WebSocket) sur le port ' + PORT)))
+  .then(() => server.listen(PORT, () => {
+    console.log('\u2714 GAMServices demarre (HTTP + WebSocket) sur le port ' + PORT);
+    checkOverdueRecharges();                          // vérif immédiate au démarrage
+    setInterval(checkOverdueRecharges, 10 * 60 * 1000); // puis toutes les 10 minutes
+  }))
   .catch(err => {
     console.error('\u2718 Echec migration au demarrage :', err.message);
     server.listen(PORT, () => console.log('\u26a0 Serveur demarre (migration en erreur) port ' + PORT));
