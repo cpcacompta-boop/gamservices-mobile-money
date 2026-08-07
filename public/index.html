@@ -141,6 +141,13 @@
   .fonds-card-nums .num.uv{color:var(--gold);}
   .fonds-card-body{padding:16px 20px;}
   .fonds-card-body .form-grid{margin:0;}
+  .search-dropdown{position:absolute;left:20px;right:20px;top:calc(100% - 4px);background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 28px rgba(20,33,74,.16);max-height:280px;overflow-y:auto;z-index:30;}
+  .search-dropdown.hidden{display:none;}
+  .search-item{padding:11px 15px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid var(--line);}
+  .search-item:last-child{border-bottom:none;}
+  .search-item:hover{background:var(--surface-2);}
+  .search-item .nm{font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .search-item .un{color:var(--ink-faint);font-size:11px;white-space:nowrap;}
   .fonds-card-foot{padding:0 20px 16px;display:flex;gap:8px;flex-wrap:wrap;}
   .stat{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:0 1px 2px rgba(20,33,74,.05);position:relative;overflow:hidden;}
   .stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brand);}
@@ -624,7 +631,8 @@
       try{ S.zones=await api('/zones'); }catch(e){ S.zones=S.zones||[]; }
     }
     if(v==='fonds'){
-      try{ S.mastersOverview=await api('/masters/overview'); }catch(e){ dlgError('Chargement', 'Impossible de charger les fonds : '+(e.message||'')); S.mastersOverview=S.mastersOverview||[]; }
+      try{ S.fondsStats=await api('/masters/stats'); }catch(e){ dlgError('Chargement', 'Impossible de charger les statistiques : '+(e.message||'')); S.fondsStats=S.fondsStats||{count:0,total_uv:0,total_fcfa:0,total_en_attente:0,total_en_retard:0}; }
+      if(S.fondsSelectedId){ try{ S.fondsSelectedDetail=await api('/masters/'+S.fondsSelectedId+'/summary'); }catch(e){ S.fondsSelectedId=null; S.fondsSelectedDetail=null; } }
     }
     if((v==='recharges' || v==='dashboard') && S.auth.user.role==='MASTER'){ await loadMasterData(); }
   }
@@ -669,26 +677,14 @@
     return `<div class="welcome"><h2>Bonjour, ${esc(nom)} 👋</h2><p>Content de te revoir. Voici ton espace ${esc(roleLabel(u.role))}.</p></div>${cards}`;
   }
 
-  /* ---------- SUPERVISEUR : page dédiée "Fonds Masters" ---------- */
-  function renderFondsMasters(){
-    const list=S.mastersOverview||[];
-    const totalUv=list.reduce((s,m)=>s+Number(m.solde_uv||0),0);
-    const totalFcfa=list.reduce((s,m)=>s+Number(m.solde_fcfa||0),0);
-    const totalAttente=list.reduce((s,m)=>s+Number(m.en_attente||0),0);
-    const totalRetard=list.reduce((s,m)=>s+Number(m.en_retard||0),0);
-    const header=`<div class="stat-row">
-        <div class="stat"><div class="lbl">Masters actifs</div><div class="num">${list.length}</div></div>
-        <div class="stat gold"><div class="lbl">Total UV en circulation</div><div class="num">${fmtUv(totalUv)}</div></div>
-        <div class="stat"><div class="lbl">Total FCFA encaissé</div><div class="num">${fmtFcfa(totalFcfa)}</div></div>
-        <div class="stat${totalRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${totalAttente}${totalRetard?' <span style="font-size:11px;color:var(--red)">('+totalRetard+' en retard)</span>':''}</div></div>
-      </div>`;
-    if(!list.length){
-      return header+'<div class="panel"><div style="padding:24px;color:var(--ink-soft);font-size:11px;line-height:1.6">Aucun compte Master pour le moment. Crée-en un dans <b>Compte Équipe</b>, puis reviens ici pour créditer son fonds.</div></div>';
-    }
-    const cards=list.map(m=>{
-      const nom=[m.nom,m.prenoms].filter(Boolean).join(' ')||m.username;
-      const isAlert=Number(m.en_retard||0)>0;
-      return `<div class="fonds-card${isAlert?' alert':''}">
+  /* ---------- SUPERVISEUR : page dédiée "Fonds Masters" (recherche + sélection à la volée) ---------- */
+  // Conçu pour tenir à l'échelle même avec des milliers de Masters : on ne charge jamais
+  // toute la liste — seulement des statistiques globales légères + une recherche paginée (20 max)
+  // + le détail du Master choisi, chargé à la demande.
+  function fondsMasterCardHtml(m){
+    const nom=[m.nom,m.prenoms].filter(Boolean).join(' ')||m.username;
+    const isAlert=Number(m.en_retard||0)>0;
+    return `<div class="fonds-card${isAlert?' alert':''}">
         <div class="fonds-card-head">
           <span class="av-ini">${esc(initials(nom))}</span>
           <div style="min-width:0">
@@ -714,10 +710,29 @@
         </div>
         <div class="fonds-card-foot">
           <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="${m.id}" data-uname="${esc(nom)}">Historique des recharges</button>
+          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--ink-soft);border:1px solid var(--line)" data-clearmaster="1">✕ Changer de Master</button>
         </div>
       </div>`;
-    }).join('');
-    return header+`<div class="fonds-grid">${cards}</div>`;
+  }
+  function renderFondsMasters(){
+    const st=S.fondsStats||{count:0,total_uv:0,total_fcfa:0,total_en_attente:0,total_en_retard:0};
+    const header=`<div class="stat-row">
+        <div class="stat"><div class="lbl">Masters actifs</div><div class="num">${st.count}</div></div>
+        <div class="stat gold"><div class="lbl">Total UV en circulation</div><div class="num">${fmtUv(st.total_uv)}</div></div>
+        <div class="stat"><div class="lbl">Total FCFA encaissé</div><div class="num">${fmtFcfa(st.total_fcfa)}</div></div>
+        <div class="stat${st.total_en_retard>0?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${st.total_en_attente}${st.total_en_retard>0?' <span style="font-size:11px;color:var(--red)">('+st.total_en_retard+' en retard)</span>':''}</div></div>
+      </div>`;
+    const search=`<div class="panel" style="overflow:visible">
+        <div class="panel-head"><h3>Choisir un Master</h3><span class="hint">Recherche par nom, prénom ou identifiant</span></div>
+        <div style="padding:16px 20px;position:relative">
+          <input type="text" data-master-search placeholder="Tape un nom, un prénom ou un identifiant…" autocomplete="off" style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--line);font-size:12px;font-family:inherit;background:var(--surface-2);color:var(--ink)">
+          <div data-master-search-results class="search-dropdown hidden"></div>
+        </div>
+      </div>`;
+    const detail = S.fondsSelectedDetail
+      ? `<div data-master-detail>${fondsMasterCardHtml(S.fondsSelectedDetail)}</div>`
+      : `<div data-master-detail><div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:11px;line-height:1.6;text-align:center">👆 Recherche et sélectionne un Master ci-dessus pour consulter et créditer son fonds.</div></div></div>`;
+    return header+search+detail;
   }
   function renderRecharges(){
     const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
@@ -1228,26 +1243,93 @@
       try{ await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST'}); await loadMasterData(); renderView(); }
       catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
     }));
-    // ---- Fonds Masters (Superviseur) ----
-    document.querySelectorAll('form[data-form-credit-inline]').forEach(f=>{
-      f.addEventListener('submit', async (e)=>{
-        e.preventDefault();
-        const id=f.dataset.master;
-        const msg=f.parentElement.querySelector('[data-msg]');
-        const d=Object.fromEntries(new FormData(f).entries());
-        const btn=f.querySelector('button[type=submit]');
-        if((!d.uv||Number(d.uv)<=0) && (!d.fcfa||Number(d.fcfa)<=0)){ msg.textContent='✘ Indique un montant en UV et/ou en FCFA'; msg.className='msg err'; return; }
-        msg.textContent='Enregistrement…'; msg.className='msg'; btn.disabled=true;
-        try{
-          await api('/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-          msg.textContent='✔ Fonds crédité avec succès'; msg.className='msg ok';
-          f.reset();
-          S.mastersOverview=await api('/masters/overview');
-          if(S.view==='fonds') renderView(); else btn.disabled=false;
-        }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+    // ---- Fonds Masters (Superviseur) : recherche + sélection, aucun chargement de liste complète ----
+    if(S.view==='fonds'){
+      wireFondsSearch();
+      wireFondsDetail(document);
+    }
+  }
+
+  function renderFondsStatsRow(){
+    const st=S.fondsStats||{count:0,total_uv:0,total_fcfa:0,total_en_attente:0,total_en_retard:0};
+    return `<div class="stat-row">
+        <div class="stat"><div class="lbl">Masters actifs</div><div class="num">${st.count}</div></div>
+        <div class="stat gold"><div class="lbl">Total UV en circulation</div><div class="num">${fmtUv(st.total_uv)}</div></div>
+        <div class="stat"><div class="lbl">Total FCFA encaissé</div><div class="num">${fmtFcfa(st.total_fcfa)}</div></div>
+        <div class="stat${st.total_en_retard>0?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${st.total_en_attente}${st.total_en_retard>0?' <span style="font-size:11px;color:var(--red)">('+st.total_en_retard+' en retard)</span>':''}</div></div>
+      </div>`;
+  }
+
+  let fondsOutsideClickBound=false;
+  function wireFondsSearch(){
+    const msInput=document.querySelector('[data-master-search]');
+    const resultsBox=document.querySelector('[data-master-search-results]');
+    if(!msInput || !resultsBox) return;
+    let debounceTimer;
+    const runSearch=async ()=>{
+      const q=msInput.value.trim();
+      try{
+        const list=await api('/masters/search?q='+encodeURIComponent(q));
+        resultsBox.innerHTML = list.length
+          ? list.map(m=>{ const nm=[m.nom,m.prenoms].filter(Boolean).join(' ')||m.username;
+              return '<div class="search-item" data-pick-master="'+m.id+'"><span class="nm">'+esc(nm)+'</span><span class="un">'+esc(m.username)+'</span></div>'; }).join('')
+          : '<div class="search-item" style="color:var(--ink-faint);cursor:default">Aucun Master trouvé</div>';
+        resultsBox.querySelectorAll('[data-pick-master]').forEach(it=>it.addEventListener('click', async ()=>{
+          resultsBox.classList.add('hidden'); msInput.value='';
+          await selectMaster(it.dataset.pickMaster);
+        }));
+        resultsBox.classList.remove('hidden');
+      }catch(e){}
+    };
+    msInput.addEventListener('input', ()=>{ clearTimeout(debounceTimer); debounceTimer=setTimeout(runSearch,250); });
+    msInput.addEventListener('focus', runSearch);
+    if(!fondsOutsideClickBound){
+      fondsOutsideClickBound=true;
+      document.addEventListener('click', (e)=>{
+        const box=document.querySelector('[data-master-search-results]'); const inp=document.querySelector('[data-master-search]');
+        if(!box) return;
+        if(e.target!==inp && !e.target.closest('[data-master-search-results]')) box.classList.add('hidden');
       });
+    }
+  }
+
+  async function selectMaster(id){
+    try{
+      const m=await api('/masters/'+id+'/summary');
+      S.fondsSelectedId=id; S.fondsSelectedDetail=m;
+      const box=document.querySelector('[data-master-detail]');
+      if(box){ box.innerHTML=fondsMasterCardHtml(m); wireFondsDetail(box); }
+    }catch(err){ dlgError('Erreur', err.message); }
+  }
+
+  function wireFondsDetail(scope){
+    scope=scope||document;
+    const f=scope.querySelector('form[data-form-credit-inline]');
+    if(f){ f.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const id=f.dataset.master;
+      const msg=f.parentElement.querySelector('[data-msg]');
+      const d=Object.fromEntries(new FormData(f).entries());
+      const btn=f.querySelector('button[type=submit]');
+      if((!d.uv||Number(d.uv)<=0) && (!d.fcfa||Number(d.fcfa)<=0)){ msg.textContent='✘ Indique un montant en UV et/ou en FCFA'; msg.className='msg err'; return; }
+      msg.textContent='Enregistrement…'; msg.className='msg'; btn.disabled=true;
+      try{
+        await api('/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        S.fondsStats=await api('/masters/stats');
+        const statRow=document.querySelector('.stat-row'); if(statRow) statRow.outerHTML=renderFondsStatsRow();
+        await selectMaster(id);
+        dlgSuccess('Fonds crédité', 'Le fonds a été mis à jour avec succès.');
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+    }); }
+    const hb=scope.querySelector('[data-masterhistory]');
+    if(hb) hb.addEventListener('click',()=>openMasterHistory(hb.dataset.masterhistory, hb.dataset.uname||''));
+    const cb=scope.querySelector('[data-clearmaster]');
+    if(cb) cb.addEventListener('click',()=>{
+      S.fondsSelectedId=null; S.fondsSelectedDetail=null;
+      const box=document.querySelector('[data-master-detail]');
+      if(box) box.innerHTML='<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:11px;line-height:1.6;text-align:center">👆 Recherche et sélectionne un Master ci-dessus pour consulter et créditer son fonds.</div></div>';
+      const si=document.querySelector('[data-master-search]'); if(si){ si.value=''; si.focus(); }
     });
-    document.querySelectorAll('[data-masterhistory]').forEach(b=>b.addEventListener('click',()=>openMasterHistory(b.dataset.masterhistory, b.dataset.uname||'')));
   }
 
   /* ---------- TEMPS RÉEL (WebSocket) ---------- */
