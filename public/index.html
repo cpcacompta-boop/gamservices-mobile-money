@@ -588,7 +588,12 @@
   /* ---------- VIEWS ---------- */
   const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
-  async function loadView(v){ try{ if(v==='equipe'){ S.users=await api('/users'); S.zones=await api('/zones'); } if(v==='zones'){ S.zones=await api('/zones'); S.users=await api('/users'); } }catch(e){ } }
+  async function loadView(v){
+    if(v==='equipe' || v==='zones'){
+      try{ S.users=await api('/users'); }catch(e){ dlgError('Chargement', 'Impossible de charger les comptes : '+(e.message||'')); }
+      try{ S.zones=await api('/zones'); }catch(e){ S.zones=S.zones||[]; }
+    }
+  }
   function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
