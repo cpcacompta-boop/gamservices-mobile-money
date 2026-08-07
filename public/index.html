@@ -633,14 +633,14 @@
         <div class="panel-head"><h3>Comptes de l'équipe</h3><span class="hint">${users.length} compte(s)</span></div>
         <div class="table-wrap"><table>
           <thead><tr><th>Membre</th><th>Code</th><th>Identifiant</th><th>Rôle</th><th>Contact</th><th>Statut</th><th>Position</th><th>Actions</th></tr></thead>
-          <tbody>${users.length?users.map(u=>{ const disp=[u.nom,u.prenoms].filter(Boolean).join(' ')||'—'; const isSup=u.username==='Superviseur';
+          <tbody>${users.length?users.map(u=>{ const disp = u.role==='PDV' ? (u.nom_commercial||'—') : ([u.nom,u.prenoms].filter(Boolean).join(' ')||'—'); const isSup=u.username==='Superviseur';
             const statut = u.actif===false ? '<span class="pill" style="background:var(--red-soft);color:var(--red)">Bloqué</span>' : '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Actif</span>';
             return `<tr>
-            <td><span class="av-ini">${esc(initials(u.nom||u.username))}</span>${esc(disp)}</td>
+            <td><span class="av-ini">${esc(initials(u.role==='PDV'?(u.nom_commercial||u.username):(u.nom||u.username)))}</span>${esc(disp)}</td>
             <td>${esc(u.code||'—')}</td>
             <td><b>${esc(u.username)}</b></td>
             <td>${rolePill(u.role)}</td>
-            <td>${esc(u.contact||'—')}</td>
+            <td>${esc(u.role==='PDV'?(u.contact_responsable||u.contact_gerant||'—'):(u.contact||'—'))}</td>
             <td>${statut}</td>
             <td style="font-size:11.5px" data-loc-live="${u.id}">${mapLink(u.lat,u.lng)}${u.loc_updated_at?'<div style="color:var(--ink-faint);margin-top:2px">'+timeAgo(u.loc_updated_at)+'</div>':''}</td>
             <td><div class="act-btns">
@@ -672,6 +672,24 @@
         photoField('piece_recto','Pièce / permis — recto',1)+
         photoField('piece_verso','Pièce / permis — verso',1)+
         '<div class="field span2"><label>Identifiant (connexion)</label><input name="username" required placeholder="ex : SD-050826"></div>'+
+        '<div class="field span2" style="color:var(--ink-soft);font-size:12px;padding-top:2px">🔒 Mot de passe par défaut : <b>0000</b> — un nouveau mot de passe sera demandé à la 1ère connexion.</div>'+
+      '</div>';
+    }
+    if(role==='PDV'){
+      return '<div class="form-grid">'+
+        photoField('photo','Photo (responsable ou gérant)')+
+        '<div class="field"><label>Identifiant (ID)</label><input name="username" required placeholder="ex : PDV-001"></div>'+
+        '<div class="field"><label>Nom commercial (entreprise)</label><input name="nom_commercial" placeholder="ex : Boutique Chez Awa"></div>'+
+        '<div class="field"><label>Ville</label><input name="ville" placeholder="ex : Abidjan"></div>'+
+        '<div class="field"><label>Quartier</label><input name="quartier" placeholder="ex : Cocody"></div>'+
+        '<div class="field"><label>Zone</label><input name="zone" placeholder="ex : Zone Nord"></div>'+
+        '<div class="field span2"><label>Situation géographique</label><input name="situation_geo" placeholder="ex : face au marché, près de la pharmacie"></div>'+
+        '<div class="field span2"><label>Coordonnées GPS</label><div style="display:flex;gap:8px;align-items:center"><input name="gps" data-gps placeholder="ex : 5.35995, -4.00826" style="flex:1"><button type="button" class="btn small" data-gps-btn style="white-space:nowrap">📍 Ma position</button></div></div>'+
+        '<div class="field"><label>Nom du responsable</label><input name="nom_responsable" placeholder="ex : Awa Traoré"></div>'+
+        '<div class="field"><label>Contact du responsable</label><input name="contact_responsable" placeholder="ex : 07 00 00 00 00"></div>'+
+        '<div class="field"><label>Nom du gérant</label><input name="nom_gerant" placeholder="ex : Koffi Jean"></div>'+
+        '<div class="field"><label>Contact du gérant</label><input name="contact_gerant" placeholder="ex : 05 00 00 00 00"></div>'+
+        photoField('photo_local','Photo du local',1)+
         '<div class="field span2" style="color:var(--ink-soft);font-size:12px;padding-top:2px">🔒 Mot de passe par défaut : <b>0000</b> — un nouveau mot de passe sera demandé à la 1ère connexion.</div>'+
       '</div>';
     }
@@ -709,36 +727,82 @@
         codeInp.value=(ini||'XX')+'-'+dd+mm+yy; };
       uf.querySelectorAll('[data-nm]').forEach(i=>i.addEventListener('input',gen)); gen();
     }
+    const gpsBtn=uf.querySelector('[data-gps-btn]');
+    if(gpsBtn){ gpsBtn.addEventListener('click',()=>{
+      if(!navigator.geolocation){ dlgError('GPS indisponible','Cet appareil ne gère pas la géolocalisation.'); return; }
+      const inp=uf.querySelector('[data-gps]'); const old=gpsBtn.textContent; gpsBtn.textContent='📍 …'; gpsBtn.disabled=true;
+      navigator.geolocation.getCurrentPosition(
+        pos=>{ if(inp) inp.value=pos.coords.latitude.toFixed(6)+', '+pos.coords.longitude.toFixed(6); gpsBtn.textContent=old; gpsBtn.disabled=false; },
+        ()=>{ gpsBtn.textContent=old; gpsBtn.disabled=false; dlgError('Position indisponible','Autorise la localisation pour récupérer les coordonnées.'); },
+        {enableHighAccuracy:true,timeout:10000}
+      );
+    }); }
+  }
+  function gpsLink(gps){ if(!gps) return '—'; const m=String(gps).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/); if(m) return '<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+m[1]+','+m[2]+'">'+esc(gps)+' — voir sur la carte</a>'; return esc(gps); }
+  function editFields(u){ const v=(k)=>esc(u[k]||'');
+    if(u.role==='PDV'){
+      return photoField('photo','Photo (responsable ou gérant)')+
+        '<div class="field"><label>Nom commercial</label><input name="nom_commercial" value="'+v('nom_commercial')+'"></div>'+
+        '<div class="field"><label>Ville</label><input name="ville" value="'+v('ville')+'"></div>'+
+        '<div class="field"><label>Quartier</label><input name="quartier" value="'+v('quartier')+'"></div>'+
+        '<div class="field"><label>Zone</label><input name="zone" value="'+v('zone')+'"></div>'+
+        '<div class="field span2"><label>Situation géographique</label><input name="situation_geo" value="'+v('situation_geo')+'"></div>'+
+        '<div class="field span2"><label>Coordonnées GPS</label><div style="display:flex;gap:8px;align-items:center"><input name="gps" data-gps value="'+v('gps')+'" style="flex:1"><button type="button" class="btn small" data-gps-btn style="white-space:nowrap">📍 Ma position</button></div></div>'+
+        '<div class="field"><label>Nom du responsable</label><input name="nom_responsable" value="'+v('nom_responsable')+'"></div>'+
+        '<div class="field"><label>Contact du responsable</label><input name="contact_responsable" value="'+v('contact_responsable')+'"></div>'+
+        '<div class="field"><label>Nom du gérant</label><input name="nom_gerant" value="'+v('nom_gerant')+'"></div>'+
+        '<div class="field"><label>Contact du gérant</label><input name="contact_gerant" value="'+v('contact_gerant')+'"></div>'+
+        photoField('photo_local','Photo du local',1);
+    }
+    return photoField('photo',"Photo d'identité")+
+      '<div class="field"><label>Code</label><input name="code" value="'+v('code')+'"></div>'+
+      '<div class="field"><label>Contact</label><input name="contact" value="'+v('contact')+'"></div>'+
+      '<div class="field"><label>Nom</label><input name="nom" value="'+v('nom')+'"></div>'+
+      '<div class="field"><label>Prénoms</label><input name="prenoms" value="'+v('prenoms')+'"></div>'+
+      photoField('piece_recto','Pièce / permis — recto',1)+
+      photoField('piece_verso','Pièce / permis — verso',1);
   }
   function closeModal(){ $('overlay').classList.remove('open'); }
   async function openMember(id){
     try{ const u=await api('/users/'+id);
-      const disp=[u.nom,u.prenoms].filter(Boolean).join(' ')||u.username;
-      const idPhoto = u.photo
-        ? '<div class="id-hero-wrap"><img class="id-hero" src="'+u.photo+'" alt="Photo d\'identité"></div>'
-        : '';
-      let pieces='';
-      if(u.piece_recto) pieces+='<figure><img src="'+u.piece_recto+'"><figcaption>Pièce / permis — recto</figcaption></figure>';
-      if(u.piece_verso) pieces+='<figure><img src="'+u.piece_verso+'"><figcaption>Pièce / permis — verso</figcaption></figure>';
-      $('modal').innerHTML='<div class="modal-head"><h3>'+esc(disp)+'</h3><button class="x" data-close>✕</button></div>'+
-        '<div class="modal-body">'+
-        idPhoto+
-        '<dl class="dl">'+
-          '<dt>Nom</dt><dd>'+esc(u.nom||'—')+'</dd>'+
+      const isPDV=u.role==='PDV';
+      const disp = isPDV ? (u.nom_commercial||u.username) : ([u.nom,u.prenoms].filter(Boolean).join(' ')||u.username);
+      const idPhoto = u.photo ? '<div class="id-hero-wrap"><img class="id-hero" src="'+u.photo+'" alt="Photo"></div>' : '';
+      const statut = (u.actif===false?'<span class="pill" style="background:var(--red-soft);color:var(--red)">Bloqué</span>':'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Actif</span>');
+      const posCell = '<dt>Position (live)</dt><dd data-loc-live="'+u.id+'">'+mapLink(u.lat,u.lng)+(u.loc_updated_at?' <span style="color:var(--ink-faint);font-size:11.5px">('+timeAgo(u.loc_updated_at)+')</span>':'')+'</dd>';
+      let rows;
+      if(isPDV){
+        rows = '<dt>Nom commercial</dt><dd>'+esc(u.nom_commercial||'—')+'</dd>'+
+          '<dt>Ville</dt><dd>'+esc(u.ville||'—')+'</dd>'+
+          '<dt>Quartier</dt><dd>'+esc(u.quartier||'—')+'</dd>'+
+          '<dt>Zone</dt><dd>'+esc(u.zone||'—')+'</dd>'+
+          '<dt>Situation</dt><dd>'+esc(u.situation_geo||'—')+'</dd>'+
+          '<dt>Coordonnées GPS</dt><dd>'+gpsLink(u.gps)+'</dd>'+
+          '<dt>Responsable</dt><dd>'+esc(u.nom_responsable||'—')+(u.contact_responsable?' · '+esc(u.contact_responsable):'')+'</dd>'+
+          '<dt>Gérant</dt><dd>'+esc(u.nom_gerant||'—')+(u.contact_gerant?' · '+esc(u.contact_gerant):'')+'</dd>'+
+          '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd>'+
+          '<dt>Statut</dt><dd>'+statut+'</dd>'+posCell;
+      } else {
+        rows = '<dt>Nom</dt><dd>'+esc(u.nom||'—')+'</dd>'+
           '<dt>Prénoms</dt><dd>'+esc(u.prenoms||'—')+'</dd>'+
           '<dt>Contact</dt><dd>'+esc(u.contact||'—')+'</dd>'+
           '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd>'+
-          '<dt>Statut</dt><dd>'+(u.actif===false?'<span class="pill" style="background:var(--red-soft);color:var(--red)">Bloqué</span>':'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Actif</span>')+'</dd>'+
-          '<dt>Position</dt><dd data-loc-live="'+u.id+'">'+mapLink(u.lat,u.lng)+(u.loc_updated_at?' <span style="color:var(--ink-faint);font-size:11.5px">('+timeAgo(u.loc_updated_at)+')</span>':'')+'</dd>'+
-        '</dl>'+
-        (pieces?'<div class="det-photos-title">Pièce / permis</div><div class="det-photos">'+pieces+'</div>':'')+
-        '</div>';
+          '<dt>Statut</dt><dd>'+statut+'</dd>'+posCell;
+      }
+      let photos='';
+      if(isPDV && u.photo_local) photos+='<figure><img src="'+u.photo_local+'"><figcaption>Photo du local</figcaption></figure>';
+      if(u.piece_recto) photos+='<figure><img src="'+u.piece_recto+'"><figcaption>Pièce / permis — recto</figcaption></figure>';
+      if(u.piece_verso) photos+='<figure><img src="'+u.piece_verso+'"><figcaption>Pièce / permis — verso</figcaption></figure>';
+      const ptitle = isPDV ? 'Photo du local' : 'Pièce / permis';
+      $('modal').innerHTML='<div class="modal-head"><h3>'+esc(disp)+'</h3><button class="x" data-close>✕</button></div>'+
+        '<div class="modal-body">'+idPhoto+'<dl class="dl">'+rows+'</dl>'+
+        (photos?'<div class="det-photos-title">'+ptitle+'</div><div class="det-photos">'+photos+'</div>':'')+'</div>';
       $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
       $('overlay').classList.add('open');
     }catch(err){ dlgError('Erreur', err.message); }
   }
 
-  /* ---------- MODIFIER UN COMPTE ---------- */
+    /* ---------- MODIFIER UN COMPTE ---------- */
   async function openEditUser(id){
     try{
       const u=await api('/users/'+id);
@@ -749,13 +813,7 @@
         '<form data-form-edituser>'+
           '<div class="form-grid">'+
             '<div class="field span2"><label>Rôle du compte</label><select name="role"'+(isSup?' disabled':'')+'>'+roleOpts+'</select></div>'+
-            photoField('photo',"Photo d'identité")+
-            '<div class="field"><label>Code</label><input name="code" value="'+esc(u.code||'')+'"></div>'+
-            '<div class="field"><label>Contact</label><input name="contact" value="'+esc(u.contact||'')+'"></div>'+
-            '<div class="field"><label>Nom</label><input name="nom" value="'+esc(u.nom||'')+'"></div>'+
-            '<div class="field"><label>Prénoms</label><input name="prenoms" value="'+esc(u.prenoms||'')+'"></div>'+
-            photoField('piece_recto','Pièce / permis — recto',1)+
-            photoField('piece_verso','Pièce / permis — verso',1)+
+            editFields(u)+
           '</div>'+
           '<div class="msg" data-msg></div>'+
           '<div class="form-actions"><button class="btn" type="submit">Enregistrer les modifications</button></div>'+
@@ -767,7 +825,7 @@
       PHOTOS={};
       wireRoleFields(ef); // branche l'upload photo + génération de code (n'écrase pas la valeur déjà tapée)
       // pré-affiche les photos déjà enregistrées
-      [['photo',u.photo],['piece_recto',u.piece_recto],['piece_verso',u.piece_verso]].forEach(([field,val])=>{
+      [['photo',u.photo],['piece_recto',u.piece_recto],['piece_verso',u.piece_verso],['photo_local',u.photo_local]].forEach(([field,val])=>{
         if(!val) return; const box2=ef.querySelector('[data-slot="'+field+'"]'); if(box2){ box2.textContent=''; box2.style.backgroundImage='url('+val+')'; }
       });
       ef.addEventListener('submit', async (e)=>{
