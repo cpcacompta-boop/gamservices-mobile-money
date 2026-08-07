@@ -443,6 +443,22 @@ app.get('/users/:id/recharges', requireRole('SUPERVISEUR'), wrap(async (req, res
 }));
 
 /* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
+// Vue d'ensemble des fonds de tous les Masters (page dédiée superviseur)
+app.get('/masters/overview', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(`
+    SELECT u.id, u.username, u.nom, u.prenoms, u.contact, u.solde_uv, u.solde_fcfa,
+      COUNT(rc.id) FILTER (WHERE rc.statut='EN_ATTENTE') AS en_attente,
+      COUNT(rc.id) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.created_at < date_trunc('day', now())) AS en_retard,
+      COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.created_at >= date_trunc('day', now())), 0) AS uv_du_jour,
+      MAX(rc.created_at) AS derniere_recharge
+    FROM users u
+    LEFT JOIN uv_recharges rc ON rc.master_id = u.id
+    WHERE u.role='MASTER'
+    GROUP BY u.id
+    ORDER BY u.nom NULLS LAST, u.prenoms NULLS LAST, u.username`);
+  res.json(r.rows);
+}));
+
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   // On exclut les images (photo, pièces) de la liste pour rester léger
   const baseCols = `id, username, role, nom, prenoms, contact, code, actif, created_at,
