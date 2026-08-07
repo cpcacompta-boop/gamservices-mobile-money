@@ -202,14 +202,14 @@ app.get('/icon-192.png', (req,res)=> sendPng(res, ICON_192));
 app.get('/icon-512.png', (req,res)=> sendPng(res, ICON_512));
 app.get('/apple-touch-icon.png', (req,res)=> sendPng(res, ICON_180));
 app.get('/manifest.webmanifest', (req,res)=>{ res.set('Content-Type','application/manifest+json').json({ name:'GAMServices Holding', short_name:'GAMServices', description:'Console Mobile Money — GAMServices Holding', start_url:'/', scope:'/', display:'standalone', background_color:'#16224A', theme_color:'#16224A', orientation:'portrait-primary', icons:[{src:'/icon-192.png',sizes:'192x192',type:'image/png',purpose:'any maskable'},{src:'/icon-512.png',sizes:'512x512',type:'image/png',purpose:'any maskable'}] }); });
-app.get('/sw.js', (req,res)=>{ res.set('Content-Type','application/javascript').set('Cache-Control','no-cache').send("\nconst CACHE='gam-shell-v1';\nself.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c=>c.add('/')).catch(()=>{})); self.skipWaiting(); });\nself.addEventListener('activate', e => e.waitUntil(self.clients.claim()));\nself.addEventListener('fetch', e => {\n  if (e.request.method !== 'GET') return;\n  e.respondWith(fetch(e.request).then(res=>{ try{ if(new URL(e.request.url).pathname==='/'){ const cp=res.clone(); caches.open(CACHE).then(c=>c.put('/',cp)); } }catch(_){} return res; }).catch(()=>caches.match(e.request).then(m=>m||caches.match('/'))));\n});\n"); });
+app.get('/sw.js', (req, res) => { res.set('Content-Type', 'application/javascript').set('Cache-Control', 'no-cache, no-store, must-revalidate').send("self.addEventListener('install', function(e){ self.skipWaiting(); });\nself.addEventListener('activate', function(e){ e.waitUntil((async function(){\n  try { var keys = await caches.keys(); await Promise.all(keys.map(function(k){ return caches.delete(k); })); } catch(_){}\n  try { await self.clients.claim(); } catch(_){}\n})()); });\nself.addEventListener('fetch', function(e){\n  // Passe-plat reseau uniquement : on ne sert aucun cache pour ne jamais afficher une version cassee.\n});\n"); });
 
 // A partir d'ici, connexion requise
 app.use(requireAuth);
 
 app.get('/me', wrap(async (req, res) => {
   const u = req.user;
-  res.json({ id: u.id, username: u.username, role: u.role, nom: u.nom, linked_id: u.linked_id });
+  res.json({ id: u.id, username: u.username, role: u.role, nom: u.nom, linked_id: u.linked_id, mustChangePassword: !!u.must_change_password });
 }));
 
 app.post('/logout', wrap(async (req, res) => {
