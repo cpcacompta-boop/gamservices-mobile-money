@@ -84,17 +84,25 @@
   .sidebar{width:264px;flex-shrink:0;background:linear-gradient(180deg,var(--brand-deep-1),var(--brand-deep-2));color:#fff;display:flex;flex-direction:column;padding:20px 0 20px;position:sticky;top:0;height:100vh;}
   .side-logo{padding:4px 22px 16px;border-bottom:1px solid rgba(200,155,60,.30);margin-bottom:6px;display:flex;justify-content:center;}
   .side-logo img{width:170px;max-width:100%;filter:drop-shadow(0 4px 12px rgba(0,0,0,.3));}
-  nav{display:flex;flex-direction:column;gap:2px;padding:8px 12px;overflow-y:auto;flex:1;}
+  nav{display:flex;flex-direction:column;gap:6px;padding:10px 14px;overflow-y:auto;flex:1;}
   nav::-webkit-scrollbar{width:6px;} nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px;}
-  .nav-group{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.40);padding:16px 12px 8px;display:flex;align-items:center;gap:9px;}
+  .nav-group{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.40);padding:16px 8px 8px;display:flex;align-items:center;gap:9px;}
   .nav-group::after{content:"";flex:1;height:1px;background:rgba(255,255,255,.10);}
-  nav button{all:unset;cursor:pointer;padding:10px 12px;border-radius:10px;position:relative;font-size:13.5px;font-weight:600;color:rgba(255,255,255,.76);display:flex;align-items:center;gap:11px;transition:background .16s,color .16s;}
-  nav button .ico{width:18px;height:18px;flex-shrink:0;opacity:.82;transition:color .16s,opacity .16s;}
-  nav button:hover{background:rgba(255,255,255,.08);color:#fff;}
-  nav button:hover .ico{opacity:1;}
+  nav button{all:unset;cursor:pointer;padding:11px 12px;border-radius:11px;position:relative;font-size:14.5px;font-weight:500;letter-spacing:.005em;line-height:1.3;color:rgba(255,255,255,.88);display:flex;align-items:center;gap:13px;transition:background .16s,color .16s;}
+  .ico-wrap{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:rgba(255,255,255,.09);transition:background .16s;}
+  nav button .ico{width:17px;height:17px;flex-shrink:0;stroke:#fff;opacity:.92;transition:opacity .16s;}
+  nav button:hover{background:rgba(255,255,255,.07);color:#fff;}
+  nav button:hover .ico-wrap{background:rgba(255,255,255,.16);}
   nav button.active{background:#fff;color:var(--brand);box-shadow:0 6px 16px rgba(0,0,0,.20);}
   nav button.active::before{content:"";position:absolute;left:-12px;top:50%;transform:translateY(-50%);width:4px;height:22px;background:var(--gold);border-radius:0 4px 4px 0;}
-  nav button.active .ico{opacity:1;color:var(--gold);}
+  nav button.active .ico-wrap{background:var(--gold);}
+  nav button.active .ico{stroke:#fff;opacity:1;}
+  nav button[data-view="dashboard"] .ico-wrap{background:rgba(58,98,190,.35);}
+  nav button[data-view="equipe"] .ico-wrap{background:rgba(200,155,60,.30);}
+  nav button[data-view="zones"] .ico-wrap{background:rgba(181,50,42,.30);}
+  nav button.active[data-view="dashboard"] .ico-wrap,
+  nav button.active[data-view="equipe"] .ico-wrap,
+  nav button.active[data-view="zones"] .ico-wrap{background:var(--gold);}
   .side-user{margin:8px 14px 0;padding:13px 8px 0;border-top:1px solid rgba(255,255,255,.12);display:flex;align-items:center;gap:11px;}
   .side-user .av{width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,var(--gold),#9c7622);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;box-shadow:0 4px 12px rgba(0,0,0,.28);}
   .side-user .who{flex:1;min-width:0;}
