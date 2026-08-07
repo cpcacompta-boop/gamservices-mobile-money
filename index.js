@@ -86,6 +86,15 @@ async function migrate() {
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS positions_user_time ON positions(user_id, created_at DESC)`);
+  // Zones : un commercial est responsable d'une zone (avec ses quartiers) ; un suppléant peut le remplacer
+  await pool.query(`CREATE TABLE IF NOT EXISTS zones (
+    id SERIAL PRIMARY KEY,
+    nom TEXT NOT NULL,
+    responsable_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    suppleant_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    quartiers TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -248,6 +257,42 @@ app.get('/users/:id/positions', requireRole('SUPERVISEUR'), wrap(async (req, res
   res.json(r.rows);
 }));
 
+/* ---- ZONES (SUPERVISEUR uniquement) ---- */
+app.get('/zones', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(`
+    SELECT z.id, z.nom, z.quartiers, z.responsable_id, z.suppleant_id, z.created_at,
+      r.nom AS resp_nom, r.prenoms AS resp_prenoms, r.username AS resp_username,
+      s.nom AS supp_nom, s.prenoms AS supp_prenoms, s.username AS supp_username
+    FROM zones z
+    LEFT JOIN users r ON r.id = z.responsable_id
+    LEFT JOIN users s ON s.id = z.suppleant_id
+    ORDER BY z.nom`);
+  res.json(r.rows);
+}));
+
+app.post('/zones', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const { nom, responsable_id, suppleant_id, quartiers } = req.body;
+  if (!nom) return res.status(400).json({ error: 'Le nom de la zone est obligatoire' });
+  const r = await pool.query(
+    'INSERT INTO zones (nom, responsable_id, suppleant_id, quartiers) VALUES ($1,$2,$3,$4) RETURNING id',
+    [nom, responsable_id || null, suppleant_id || null, quartiers || null]);
+  res.json({ ok: true, id: r.rows[0].id });
+}));
+
+app.put('/zones/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const { nom, responsable_id, suppleant_id, quartiers } = req.body;
+  if (!nom) return res.status(400).json({ error: 'Le nom de la zone est obligatoire' });
+  await pool.query(
+    'UPDATE zones SET nom=$1, responsable_id=$2, suppleant_id=$3, quartiers=$4 WHERE id=$5',
+    [nom, responsable_id || null, suppleant_id || null, quartiers || null, req.params.id]);
+  res.json({ ok: true });
+}));
+
+app.delete('/zones/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  await pool.query('DELETE FROM zones WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
 /* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   // On exclut les images (photo, pièces) de la liste pour rester léger
@@ -255,6 +300,7 @@ app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
     `SELECT id, username, role, nom, prenoms, contact, code, actif, created_at,
             last_lat AS lat, last_lng AS lng, loc_updated_at,
             nom_commercial, ville, quartier, zone, contact_responsable, contact_gerant,
+            (SELECT z.nom FROM zones z WHERE z.responsable_id = users.id LIMIT 1) AS zone_nom,
             (photo IS NOT NULL) AS a_photo
      FROM users ORDER BY role, username`);
   res.json(r.rows);
@@ -265,6 +311,11 @@ app.get('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   if (!r.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
   const u = r.rows[0]; delete u.pass_hash;
   u.lat = u.last_lat; u.lng = u.last_lng; // alias attendus par le frontend
+  if (u.role === 'COMMERCIAL') {
+    const z = await pool.query(
+      'SELECT id, nom, quartiers, (responsable_id=$1) AS est_chef FROM zones WHERE responsable_id=$1 OR suppleant_id=$1 ORDER BY (responsable_id=$1) DESC LIMIT 1', [u.id]);
+    u.zone_info = z.rows[0] || null;
+  }
   res.json(u);
 }));
 
@@ -282,6 +333,10 @@ app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const vals = [username, hashPass(DEFAULT_PASSWORD), role, true, b.nom||null, b.prenoms||null, b.contact||null, b.code||null, b.photo||null, b.piece_recto||null, b.piece_verso||null, b.nom_commercial||null, b.ville||null, b.quartier||null, b.zone||null, b.situation_geo||null, b.gps||null, b.nom_responsable||null, b.contact_responsable||null, b.nom_gerant||null, b.contact_gerant||null, b.photo_local||null];
   const ph = vals.map((_, i) => '$' + (i + 1)).join(',');
   const r = await pool.query(`INSERT INTO users (${cols.join(',')}) VALUES (${ph}) RETURNING id, username, role, nom, prenoms, contact, code, actif`, vals);
+  // Si c'est un commercial rattaché à une zone, il en devient le responsable
+  if (role === 'COMMERCIAL' && b.zone_id) {
+    await pool.query('UPDATE zones SET responsable_id=$1 WHERE id=$2', [r.rows[0].id, b.zone_id]);
+  }
   res.json(r.rows[0]);
 }));
 
