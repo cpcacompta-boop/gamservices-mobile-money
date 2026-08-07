@@ -62,6 +62,18 @@ async function migrate() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS piece_verso TEXT`);
   // Oblige à définir un nouveau mot de passe (1er login ou après réinitialisation par le superviseur)
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE`);
+  // Champs Point de Vente (PDV)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nom_commercial TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ville TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS quartier TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS zone TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS situation_geo TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS gps TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nom_responsable TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_responsable TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS nom_gerant TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_gerant TEXT`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_local TEXT`);
   // Géolocalisation temps réel des agents
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lat DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_lng DOUBLE PRECISION`);
@@ -242,6 +254,7 @@ app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const r = await pool.query(
     `SELECT id, username, role, nom, prenoms, contact, code, actif, created_at,
             last_lat AS lat, last_lng AS lng, loc_updated_at,
+            nom_commercial, ville, quartier, zone, contact_responsable, contact_gerant,
             (photo IS NOT NULL) AS a_photo
      FROM users ORDER BY role, username`);
   res.json(r.rows);
@@ -258,30 +271,33 @@ app.get('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
 const DEFAULT_PASSWORD = '0000'; // mot de passe par défaut à la création d'un compte
 
 app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  const { username, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso } = req.body;
+  const b = req.body; const { username, role } = b;
   if (!username || !role)
     return res.status(400).json({ error: 'Identifiant et rôle sont obligatoires' });
   if (!['SUPERVISEUR', 'MASTER', 'COMMERCIAL', 'PDV'].includes(role))
     return res.status(400).json({ error: 'Rôle invalide' });
   const exists = await pool.query('SELECT 1 FROM users WHERE username=$1', [username]);
   if (exists.rows.length) return res.status(400).json({ error: 'Cet identifiant existe déjà' });
-  // Mot de passe par défaut 0000 : le compte devra en définir un nouveau à la 1ère connexion
-  const r = await pool.query(
-    `INSERT INTO users (username, pass_hash, role, nom, prenoms, contact, code, photo, piece_recto, piece_verso, must_change_password)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING id, username, role, nom, prenoms, contact, code, actif`,
-    [username, hashPass(DEFAULT_PASSWORD), role, nom || null, prenoms || null, contact || null, code || null,
-     photo || null, piece_recto || null, piece_verso || null]);
+  const cols = ['username','pass_hash','role','must_change_password','nom','prenoms','contact','code','photo','piece_recto','piece_verso','nom_commercial','ville','quartier','zone','situation_geo','gps','nom_responsable','contact_responsable','nom_gerant','contact_gerant','photo_local'];
+  const vals = [username, hashPass(DEFAULT_PASSWORD), role, true, b.nom||null, b.prenoms||null, b.contact||null, b.code||null, b.photo||null, b.piece_recto||null, b.piece_verso||null, b.nom_commercial||null, b.ville||null, b.quartier||null, b.zone||null, b.situation_geo||null, b.gps||null, b.nom_responsable||null, b.contact_responsable||null, b.nom_gerant||null, b.contact_gerant||null, b.photo_local||null];
+  const ph = vals.map((_, i) => '$' + (i + 1)).join(',');
+  const r = await pool.query(`INSERT INTO users (${cols.join(',')}) VALUES (${ph}) RETURNING id, username, role, nom, prenoms, contact, code, actif`, vals);
   res.json(r.rows[0]);
 }));
 
 // Modifier les informations d'un agent (diffuse en direct)
 app.put('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
-  const { nom, prenoms, contact, code, photo, piece_recto, piece_verso } = req.body;
+  const b = req.body;
   await pool.query(
     `UPDATE users SET nom=$1, prenoms=$2, contact=$3, code=$4,
-       photo=COALESCE($5,photo), piece_recto=COALESCE($6,piece_recto), piece_verso=COALESCE($7,piece_verso)
-     WHERE id=$8`,
-    [nom || null, prenoms || null, contact || null, code || null, photo || null, piece_recto || null, piece_verso || null, req.params.id]);
+       nom_commercial=$5, ville=$6, quartier=$7, zone=$8, situation_geo=$9, gps=$10,
+       nom_responsable=$11, contact_responsable=$12, nom_gerant=$13, contact_gerant=$14,
+       photo=COALESCE($15,photo), piece_recto=COALESCE($16,piece_recto), piece_verso=COALESCE($17,piece_verso), photo_local=COALESCE($18,photo_local)
+     WHERE id=$19`,
+    [b.nom||null, b.prenoms||null, b.contact||null, b.code||null,
+     b.nom_commercial||null, b.ville||null, b.quartier||null, b.zone||null, b.situation_geo||null, b.gps||null,
+     b.nom_responsable||null, b.contact_responsable||null, b.nom_gerant||null, b.contact_gerant||null,
+     b.photo||null, b.piece_recto||null, b.piece_verso||null, b.photo_local||null, req.params.id]);
   const r = await pool.query('SELECT id, username, role, nom, prenoms, contact, code, actif FROM users WHERE id=$1', [req.params.id]);
   if (r.rows.length) { const u = r.rows[0]; sendToUser(u.id, { type:'profile_updated', user:u }); broadcastToSupervisors({ type:'profile_updated', user:u }); }
   res.json({ ok: true });
