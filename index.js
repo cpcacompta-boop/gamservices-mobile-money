@@ -90,11 +90,14 @@ async function migrate() {
   await pool.query(`CREATE TABLE IF NOT EXISTS zones (
     id SERIAL PRIMARY KEY,
     nom TEXT NOT NULL,
-    responsable_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    suppleant_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    quartiers TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
+  // Ces colonnes ont été ajoutées après la 1ère version de la table : on les
+  // rajoute ici avec ALTER TABLE (comme pour "users") pour que ça marche
+  // aussi sur une base déjà existante, sans jamais perdre de données.
+  await pool.query(`ALTER TABLE zones ADD COLUMN IF NOT EXISTS responsable_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE zones ADD COLUMN IF NOT EXISTS suppleant_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE zones ADD COLUMN IF NOT EXISTS quartiers TEXT`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -319,9 +322,11 @@ app.get('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const u = r.rows[0]; delete u.pass_hash;
   u.lat = u.last_lat; u.lng = u.last_lng; // alias attendus par le frontend
   if (u.role === 'COMMERCIAL') {
-    const z = await pool.query(
-      'SELECT id, nom, quartiers, (responsable_id=$1) AS est_chef FROM zones WHERE responsable_id=$1 OR suppleant_id=$1 ORDER BY (responsable_id=$1) DESC LIMIT 1', [u.id]);
-    u.zone_info = z.rows[0] || null;
+    try {
+      const z = await pool.query(
+        'SELECT id, nom, quartiers, (responsable_id=$1) AS est_chef FROM zones WHERE responsable_id=$1 OR suppleant_id=$1 ORDER BY (responsable_id=$1) DESC LIMIT 1', [u.id]);
+      u.zone_info = z.rows[0] || null;
+    } catch (e) { u.zone_info = null; } // ne bloque jamais la fiche si les zones ont un souci
   }
   res.json(u);
 }));
