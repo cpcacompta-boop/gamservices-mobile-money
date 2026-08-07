@@ -296,14 +296,21 @@ app.delete('/zones/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
 /* ---- COMPTE ÉQUIPE : gestion des comptes (SUPERVISEUR uniquement) ---- */
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   // On exclut les images (photo, pièces) de la liste pour rester léger
-  const r = await pool.query(
-    `SELECT id, username, role, nom, prenoms, contact, code, actif, created_at,
+  const baseCols = `id, username, role, nom, prenoms, contact, code, actif, created_at,
             last_lat AS lat, last_lng AS lng, loc_updated_at,
             nom_commercial, ville, quartier, zone, contact_responsable, contact_gerant,
-            (SELECT z.nom FROM zones z WHERE z.responsable_id = users.id LIMIT 1) AS zone_nom,
-            (photo IS NOT NULL) AS a_photo
-     FROM users ORDER BY role, username`);
-  res.json(r.rows);
+            (photo IS NOT NULL) AS a_photo`;
+  try {
+    const r = await pool.query(
+      `SELECT ${baseCols},
+              (SELECT z.nom FROM zones z WHERE z.responsable_id = users.id LIMIT 1) AS zone_nom
+       FROM users ORDER BY role, username`);
+    res.json(r.rows);
+  } catch (e) {
+    // Repli si la table zones n'existe pas encore : la liste des comptes s'affiche quand même
+    const r = await pool.query(`SELECT ${baseCols} FROM users ORDER BY role, username`);
+    res.json(r.rows);
+  }
 }));
 
 app.get('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
