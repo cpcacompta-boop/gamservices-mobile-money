@@ -160,7 +160,7 @@
   .icon-btn{all:unset;cursor:pointer;font-size:15px;padding:5px 8px;border-radius:7px;color:var(--ink-faint);}
   .icon-btn:hover{background:var(--red-soft);color:var(--red);}
   /* Boutons d'action (tableau) — icônes rondes façon appli internationale, avec info-bulle */
-  .act-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  .act-btns{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;justify-content:flex-start;}
   .act-btn{all:unset;box-sizing:border-box;cursor:pointer;width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink-soft);background:var(--surface-2);border:1px solid var(--line);transition:background .15s,color .15s,border-color .15s,transform .12s,box-shadow .15s;position:relative;}
   .act-btn svg{width:16px;height:16px;pointer-events:none;}
   .act-btn:hover{transform:translateY(-1px);box-shadow:0 5px 12px rgba(20,33,74,.14);}
@@ -677,19 +677,20 @@
     }
     if(role==='PDV'){
       return '<div class="form-grid">'+
-        photoField('photo','Photo (responsable ou gérant)')+
+        photoField('photo','Photo (du gérant)')+
         '<div class="field"><label>Identifiant (ID)</label><input name="username" required placeholder="ex : PDV-001"></div>'+
         '<div class="field"><label>Nom commercial (entreprise)</label><input name="nom_commercial" placeholder="ex : Boutique Chez Awa"></div>'+
         '<div class="field"><label>Ville</label><input name="ville" placeholder="ex : Abidjan"></div>'+
         '<div class="field"><label>Quartier</label><input name="quartier" placeholder="ex : Cocody"></div>'+
         '<div class="field"><label>Zone</label><input name="zone" placeholder="ex : Zone Nord"></div>'+
         '<div class="field span2"><label>Situation géographique</label><input name="situation_geo" placeholder="ex : face au marché, près de la pharmacie"></div>'+
-        '<div class="field span2"><label>Coordonnées GPS</label><div style="display:flex;gap:8px;align-items:center"><input name="gps" data-gps placeholder="ex : 5.35995, -4.00826" style="flex:1"><button type="button" class="btn small" data-gps-btn style="white-space:nowrap">📍 Ma position</button></div></div>'+
         '<div class="field"><label>Nom du responsable</label><input name="nom_responsable" placeholder="ex : Awa Traoré"></div>'+
         '<div class="field"><label>Contact du responsable</label><input name="contact_responsable" placeholder="ex : 07 00 00 00 00"></div>'+
         '<div class="field"><label>Nom du gérant</label><input name="nom_gerant" placeholder="ex : Koffi Jean"></div>'+
         '<div class="field"><label>Contact du gérant</label><input name="contact_gerant" placeholder="ex : 05 00 00 00 00"></div>'+
-        photoField('photo_local','Photo du local',1)+
+        photoField('photo_local','Photo du local')+
+        photoField('piece_recto',"Pièce d'identité / permis — recto",1)+
+        photoField('piece_verso',"Pièce d'identité / permis — verso",1)+
         '<div class="field span2" style="color:var(--ink-soft);font-size:12px;padding-top:2px">🔒 Mot de passe par défaut : <b>0000</b> — un nouveau mot de passe sera demandé à la 1ère connexion.</div>'+
       '</div>';
     }
@@ -741,18 +742,19 @@
   function gpsLink(gps){ if(!gps) return '—'; const m=String(gps).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/); if(m) return '<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+m[1]+','+m[2]+'">'+esc(gps)+' — voir sur la carte</a>'; return esc(gps); }
   function editFields(u){ const v=(k)=>esc(u[k]||'');
     if(u.role==='PDV'){
-      return photoField('photo','Photo (responsable ou gérant)')+
+      return photoField('photo','Photo (du gérant)')+
         '<div class="field"><label>Nom commercial</label><input name="nom_commercial" value="'+v('nom_commercial')+'"></div>'+
         '<div class="field"><label>Ville</label><input name="ville" value="'+v('ville')+'"></div>'+
         '<div class="field"><label>Quartier</label><input name="quartier" value="'+v('quartier')+'"></div>'+
         '<div class="field"><label>Zone</label><input name="zone" value="'+v('zone')+'"></div>'+
         '<div class="field span2"><label>Situation géographique</label><input name="situation_geo" value="'+v('situation_geo')+'"></div>'+
-        '<div class="field span2"><label>Coordonnées GPS</label><div style="display:flex;gap:8px;align-items:center"><input name="gps" data-gps value="'+v('gps')+'" style="flex:1"><button type="button" class="btn small" data-gps-btn style="white-space:nowrap">📍 Ma position</button></div></div>'+
         '<div class="field"><label>Nom du responsable</label><input name="nom_responsable" value="'+v('nom_responsable')+'"></div>'+
         '<div class="field"><label>Contact du responsable</label><input name="contact_responsable" value="'+v('contact_responsable')+'"></div>'+
         '<div class="field"><label>Nom du gérant</label><input name="nom_gerant" value="'+v('nom_gerant')+'"></div>'+
         '<div class="field"><label>Contact du gérant</label><input name="contact_gerant" value="'+v('contact_gerant')+'"></div>'+
-        photoField('photo_local','Photo du local',1);
+        photoField('photo_local','Photo du local')+
+        photoField('piece_recto',"Pièce d'identité / permis — recto",1)+
+        photoField('piece_verso',"Pièce d'identité / permis — verso",1);
     }
     return photoField('photo',"Photo d'identité")+
       '<div class="field"><label>Code</label><input name="code" value="'+v('code')+'"></div>'+
@@ -777,7 +779,6 @@
           '<dt>Quartier</dt><dd>'+esc(u.quartier||'—')+'</dd>'+
           '<dt>Zone</dt><dd>'+esc(u.zone||'—')+'</dd>'+
           '<dt>Situation</dt><dd>'+esc(u.situation_geo||'—')+'</dd>'+
-          '<dt>Coordonnées GPS</dt><dd>'+gpsLink(u.gps)+'</dd>'+
           '<dt>Responsable</dt><dd>'+esc(u.nom_responsable||'—')+(u.contact_responsable?' · '+esc(u.contact_responsable):'')+'</dd>'+
           '<dt>Gérant</dt><dd>'+esc(u.nom_gerant||'—')+(u.contact_gerant?' · '+esc(u.contact_gerant):'')+'</dd>'+
           '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd>'+
