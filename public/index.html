@@ -128,6 +128,20 @@
 
   /* Stat cards */
   .stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px;}
+  .fonds-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;}
+  .fonds-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 1px 2px rgba(20,33,74,.05);display:flex;flex-direction:column;}
+  .fonds-card.alert{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset;}
+  .fonds-card-head{padding:16px 20px 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--line);}
+  .fonds-card-head .av-ini{width:38px;height:38px;font-size:14px;}
+  .fonds-card-nums{display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--line);}
+  .fonds-card-nums div{padding:14px 20px;}
+  .fonds-card-nums div:first-child{border-right:1px solid var(--line);}
+  .fonds-card-nums .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);font-weight:700;margin-bottom:4px;}
+  .fonds-card-nums .num{font-size:20px;font-weight:800;color:var(--ink);}
+  .fonds-card-nums .num.uv{color:var(--gold);}
+  .fonds-card-body{padding:16px 20px;}
+  .fonds-card-body .form-grid{margin:0;}
+  .fonds-card-foot{padding:0 20px 16px;display:flex;gap:8px;flex-wrap:wrap;}
   .stat{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:0 1px 2px rgba(20,33,74,.05);position:relative;overflow:hidden;}
   .stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brand);}
   .stat.gold::before{background:var(--gold);} .stat.red::before{background:var(--red);}
@@ -180,6 +194,7 @@
   .act-btn.view:hover{background:#E4ECFB;color:var(--brand);border-color:var(--brand);}
   .act-btn.edit:hover{background:#EDE7F6;color:#5B3E9A;border-color:#5B3E9A;}
   .act-btn.reset:hover{background:var(--warn-soft);color:var(--warn);border-color:var(--warn);}
+  .act-btn.credit{color:var(--gold);} .act-btn.credit:hover{background:#FBF3DE;color:#8A6A16;border-color:var(--gold);}
   .act-btn.block{color:var(--red);} .act-btn.block:hover{background:var(--red-soft);border-color:var(--red);}
   .act-btn.unblock{color:var(--pos);} .act-btn.unblock:hover{background:var(--pos-soft);border-color:var(--pos);}
   .act-btn.del:hover{background:var(--red-soft);color:var(--red);border-color:var(--red);}
@@ -576,14 +591,15 @@
     dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
     equipe:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
     zones:'<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>',
-    recharges:'<circle cx="12" cy="12" r="9"/><path d="M9.5 15.2c.4.9 1.3 1.5 2.5 1.5 1.6 0 2.6-.9 2.6-2 0-1.3-1.1-1.8-2.6-2.2-1.5-.4-2.6-.9-2.6-2.2 0-1.1 1-2 2.6-2 1.2 0 2.1.6 2.5 1.5"/><path d="M12 6.5v11"/>'
+    recharges:'<circle cx="12" cy="12" r="9"/><path d="M9.5 15.2c.4.9 1.3 1.5 2.5 1.5 1.6 0 2.6-.9 2.6-2 0-1.3-1.1-1.8-2.6-2.2-1.5-.4-2.6-.9-2.6-2.2 0-1.1 1-2 2.6-2 1.2 0 2.1.6 2.5 1.5"/><path d="M12 6.5v11"/>',
+    fonds:'<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
     {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'}]},
-    {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'}]}
+    {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones'], MASTER:['dashboard','recharges'], COMMERCIAL:['dashboard'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges'], COMMERCIAL:['dashboard'], PDV:['dashboard'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -595,7 +611,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -607,9 +623,12 @@
       try{ S.users=await api('/users'); }catch(e){ dlgError('Chargement', 'Impossible de charger les comptes : '+(e.message||'')); }
       try{ S.zones=await api('/zones'); }catch(e){ S.zones=S.zones||[]; }
     }
+    if(v==='fonds'){
+      try{ S.mastersOverview=await api('/masters/overview'); }catch(e){ dlgError('Chargement', 'Impossible de charger les fonds : '+(e.message||'')); S.mastersOverview=S.mastersOverview||[]; }
+    }
     if((v==='recharges' || v==='dashboard') && S.auth.user.role==='MASTER'){ await loadMasterData(); }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -626,7 +645,7 @@
       <div class="panel"><div class="panel-head"><h3>Démarrage rapide</h3></div>
         <div style="padding:20px;color:var(--ink-soft);font-size:11px;line-height:1.6">
           Bienvenue sur ta console. Commence par créer les comptes de ton équipe dans <b>Compte Équipe</b> : chaque personne (Master, Commercial, Point de vente) aura ses identifiants pour accéder à sa propre page.
-          <div style="margin-top:14px"><button class="btn small" data-goto="equipe">+ Créer un compte</button></div>
+          <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap"><button class="btn small" data-goto="equipe">+ Créer un compte</button><button class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-goto="fonds">💳 Fonds Masters</button></div>
         </div>
       </div>`;
     } else if(u.role==='MASTER'){
@@ -650,7 +669,56 @@
     return `<div class="welcome"><h2>Bonjour, ${esc(nom)} 👋</h2><p>Content de te revoir. Voici ton espace ${esc(roleLabel(u.role))}.</p></div>${cards}`;
   }
 
-  /* ---------- ESPACE MASTER : recharges UV ---------- */
+  /* ---------- SUPERVISEUR : page dédiée "Fonds Masters" ---------- */
+  function renderFondsMasters(){
+    const list=S.mastersOverview||[];
+    const totalUv=list.reduce((s,m)=>s+Number(m.solde_uv||0),0);
+    const totalFcfa=list.reduce((s,m)=>s+Number(m.solde_fcfa||0),0);
+    const totalAttente=list.reduce((s,m)=>s+Number(m.en_attente||0),0);
+    const totalRetard=list.reduce((s,m)=>s+Number(m.en_retard||0),0);
+    const header=`<div class="stat-row">
+        <div class="stat"><div class="lbl">Masters actifs</div><div class="num">${list.length}</div></div>
+        <div class="stat gold"><div class="lbl">Total UV en circulation</div><div class="num">${fmtUv(totalUv)}</div></div>
+        <div class="stat"><div class="lbl">Total FCFA encaissé</div><div class="num">${fmtFcfa(totalFcfa)}</div></div>
+        <div class="stat${totalRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${totalAttente}${totalRetard?' <span style="font-size:11px;color:var(--red)">('+totalRetard+' en retard)</span>':''}</div></div>
+      </div>`;
+    if(!list.length){
+      return header+'<div class="panel"><div style="padding:24px;color:var(--ink-soft);font-size:11px;line-height:1.6">Aucun compte Master pour le moment. Crée-en un dans <b>Compte Équipe</b>, puis reviens ici pour créditer son fonds.</div></div>';
+    }
+    const cards=list.map(m=>{
+      const nom=[m.nom,m.prenoms].filter(Boolean).join(' ')||m.username;
+      const isAlert=Number(m.en_retard||0)>0;
+      return `<div class="fonds-card${isAlert?' alert':''}">
+        <div class="fonds-card-head">
+          <span class="av-ini">${esc(initials(nom))}</span>
+          <div style="min-width:0">
+            <div style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(nom)}</div>
+            <div style="font-size:11px;color:var(--ink-soft)">${esc(m.username)}${m.contact?' · '+esc(m.contact):''}</div>
+          </div>
+          ${isAlert?'<span class="pill" style="background:var(--red-soft);color:var(--red);margin-left:auto;white-space:nowrap">'+m.en_retard+' en retard</span>':''}
+        </div>
+        <div class="fonds-card-nums">
+          <div><div class="lbl">Fonds UV</div><div class="num uv">${fmtUv(m.solde_uv)}</div></div>
+          <div><div class="lbl">Fonds FCFA</div><div class="num">${fmtFcfa(m.solde_fcfa)}</div></div>
+        </div>
+        <div class="fonds-card-body">
+          <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px">
+            ${Number(m.en_attente||0)} recharge(s) en attente · ${fmtUv(m.uv_du_jour)} UV vendus aujourd'hui${m.derniere_recharge?' · dernière recharge '+timeAgo(m.derniere_recharge):''}
+          </div>
+          <form data-form-credit-inline data-master="${m.id}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div class="field" style="flex:1;min-width:100px"><label>+ UV</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>
+            <div class="field" style="flex:1;min-width:100px"><label>+ FCFA</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
+            <button class="btn small" type="submit">Créditer</button>
+          </form>
+          <div class="msg" data-msg></div>
+        </div>
+        <div class="fonds-card-foot">
+          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="${m.id}" data-uname="${esc(nom)}">Historique des recharges</button>
+        </div>
+      </div>`;
+    }).join('');
+    return header+`<div class="fonds-grid">${cards}</div>`;
+  }
   function renderRecharges(){
     const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
     const pdvs=S.pdvs||[];
@@ -698,6 +766,7 @@
   const ICON_BLOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.9 4.9l14.2 14.2"/></svg>';
   const ICON_UNBLOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>';
   const ICON_TRASH='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+  const ICON_CREDIT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/></svg>';
   function renderZones(){
     var zones=S.zones||[];
     var commerciaux=(S.users||[]).filter(function(u){return u.role==='COMMERCIAL';});
@@ -758,12 +827,13 @@
             <td><span class="av-ini">${esc(initials(u.role==='PDV'?(u.nom_commercial||u.username):(u.nom||u.username)))}</span>${esc(disp)}</td>
             <td>${esc(u.code||'—')}</td>
             <td><b>${esc(u.username)}</b></td>
-            <td>${rolePill(u.role)}</td>
+            <td>${rolePill(u.role)}${u.role==='MASTER'?'<div style="font-size:10px;color:var(--ink-soft);margin-top:3px;white-space:nowrap">'+fmtUv(u.solde_uv)+' UV · '+fmtFcfa(u.solde_fcfa)+' FCFA</div>':''}</td>
             <td>${esc(u.role==='PDV'?(u.contact_responsable||u.contact_gerant||'—'):(u.contact||'—'))}</td>
             <td>${statut}</td>
             <td style="font-size:11px" data-loc-live="${u.id}">${mapLink(u.lat,u.lng)}${u.loc_updated_at?'<div style="color:var(--ink-faint);margin-top:2px">'+timeAgo(u.loc_updated_at)+'</div>':''}</td>
             <td><div class="act-btns">
               <button class="act-btn view" data-tip="Voir" data-viewuser="${u.id}">${ICON_VIEW}</button>
+              ${u.role==='MASTER'?`<button class="act-btn credit" data-tip="Créditer le fonds UV/FCFA" data-creditmaster="${u.id}" data-uname="${esc(disp)}">${ICON_CREDIT}</button>`:''}
               <button class="act-btn edit" data-tip="Modifier" data-edituser="${u.id}">${ICON_EDIT}</button>
               <button class="act-btn reset" data-tip="Réinitialiser" data-reset="${u.id}" data-uname="${esc(u.username)}">${ICON_RESET}</button>
               ${isSup?'':`<button class="act-btn ${u.actif===false?'unblock':'block'}" data-tip="${u.actif===false?'Débloquer':'Bloquer'}" data-block="${u.id}" data-blocked="${u.actif===false?'1':'0'}" data-uname="${esc(u.username)}">${u.actif===false?ICON_UNBLOCK:ICON_BLOCK}</button>
@@ -1081,6 +1151,7 @@
       });
     }
     document.querySelectorAll('[data-viewuser]').forEach(b=>b.addEventListener('click',()=>openMember(b.dataset.viewuser)));
+    document.querySelectorAll('[data-creditmaster]').forEach(b=>b.addEventListener('click',()=>openCreditMaster(b.dataset.creditmaster, b.dataset.uname||'')));
     document.querySelectorAll('[data-edituser]').forEach(b=>b.addEventListener('click',()=>openEditUser(b.dataset.edituser)));
     document.querySelectorAll('[data-block]').forEach(b=>b.addEventListener('click', async ()=>{
       const willBlock = b.dataset.blocked==='0';
@@ -1157,6 +1228,26 @@
       try{ await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST'}); await loadMasterData(); renderView(); }
       catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
     }));
+    // ---- Fonds Masters (Superviseur) ----
+    document.querySelectorAll('form[data-form-credit-inline]').forEach(f=>{
+      f.addEventListener('submit', async (e)=>{
+        e.preventDefault();
+        const id=f.dataset.master;
+        const msg=f.parentElement.querySelector('[data-msg]');
+        const d=Object.fromEntries(new FormData(f).entries());
+        const btn=f.querySelector('button[type=submit]');
+        if((!d.uv||Number(d.uv)<=0) && (!d.fcfa||Number(d.fcfa)<=0)){ msg.textContent='✘ Indique un montant en UV et/ou en FCFA'; msg.className='msg err'; return; }
+        msg.textContent='Enregistrement…'; msg.className='msg'; btn.disabled=true;
+        try{
+          await api('/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+          msg.textContent='✔ Fonds crédité avec succès'; msg.className='msg ok';
+          f.reset();
+          S.mastersOverview=await api('/masters/overview');
+          if(S.view==='fonds') renderView(); else btn.disabled=false;
+        }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+      });
+    });
+    document.querySelectorAll('[data-masterhistory]').forEach(b=>b.addEventListener('click',()=>openMasterHistory(b.dataset.masterhistory, b.dataset.uname||'')));
   }
 
   /* ---------- TEMPS RÉEL (WebSocket) ---------- */
