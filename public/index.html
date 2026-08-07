@@ -575,14 +575,15 @@
   const ICON={
     dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
     equipe:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-    zones:'<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>'
+    zones:'<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>',
+    recharges:'<circle cx="12" cy="12" r="9"/><path d="M9.5 15.2c.4.9 1.3 1.5 2.5 1.5 1.6 0 2.6-.9 2.6-2 0-1.3-1.1-1.8-2.6-2.2-1.5-.4-2.6-.9-2.6-2.2 0-1.1 1-2 2.6-2 1.2 0 2.1.6 2.5 1.5"/><path d="M12 6.5v11"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones'], MASTER:['dashboard'], COMMERCIAL:['dashboard'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones'], MASTER:['dashboard','recharges'], COMMERCIAL:['dashboard'], PDV:['dashboard'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -594,15 +595,21 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
+  async function loadMasterData(){
+    try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
+    try{ S.pdvs=await api('/pdvs'); }catch(e){ S.pdvs=S.pdvs||[]; }
+    try{ S.recharges=await api('/master/recharges'); }catch(e){ S.recharges=S.recharges||[]; }
+  }
   async function loadView(v){
     if(v==='equipe' || v==='zones'){
       try{ S.users=await api('/users'); }catch(e){ dlgError('Chargement', 'Impossible de charger les comptes : '+(e.message||'')); }
       try{ S.zones=await api('/zones'); }catch(e){ S.zones=S.zones||[]; }
     }
+    if((v==='recharges' || v==='dashboard') && S.auth.user.role==='MASTER'){ await loadMasterData(); }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -622,11 +629,61 @@
           <div style="margin-top:14px"><button class="btn small" data-goto="equipe">+ Créer un compte</button></div>
         </div>
       </div>`;
+    } else if(u.role==='MASTER'){
+      const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
+      const recent=(S.recharges||[]).slice(0,5);
+      const enAttente=(S.recharges||[]).filter(r=>r.statut==='EN_ATTENTE').length;
+      const enRetard=(S.recharges||[]).filter(isOverdue).length;
+      cards=`<div class="stat-row">
+        <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
+        <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
+        <div class="stat${enRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${enAttente}${enRetard?' <span style="font-size:11px;color:var(--red)">('+enRetard+' en retard)</span>':''}</div></div>
+      </div>
+      <div class="panel"><div class="panel-head"><h3>Dernières recharges</h3><span class="hint">Historique complet dans « Recharges UV »</span></div>
+        ${renderRechargeTable(recent, false)}
+        <div style="padding:16px 20px"><button class="btn small" data-goto="recharges">+ Nouvelle recharge</button></div>
+      </div>`;
     } else {
       cards=`<div class="panel"><div class="panel-head"><h3>Ton espace</h3></div>
         <div style="padding:20px;color:var(--ink-soft);font-size:11px;line-height:1.6">Ton espace <b>${esc(roleLabel(u.role))}</b> est prêt. Les fonctionnalités arrivent bientôt.</div></div>`;
     }
     return `<div class="welcome"><h2>Bonjour, ${esc(nom)} 👋</h2><p>Content de te revoir. Voici ton espace ${esc(roleLabel(u.role))}.</p></div>${cards}`;
+  }
+
+  /* ---------- ESPACE MASTER : recharges UV ---------- */
+  function renderRecharges(){
+    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
+    const pdvs=S.pdvs||[];
+    const list=S.recharges||[];
+    const pdvOpts='<option value="">— choisir le point de vente —</option>'+pdvs.map(p=>{
+      const nm=p.nom_commercial||p.username; const loc=[p.ville,p.quartier].filter(Boolean).join(' · ');
+      return '<option value="'+p.id+'">'+esc(nm)+(loc?' ('+esc(loc)+')':'')+'</option>';
+    }).join('');
+    return `<div class="stat-row">
+        <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
+        <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Nouvelle recharge</h3><span class="hint">Le PDV t'appelle → tu enregistres la vente d'UV</span></div>
+        <form data-form-recharge>
+          <div class="form-grid">
+            <div class="field span2"><label>Point de vente (PDV)</label><select name="pdv_id" required>${pdvOpts}</select></div>
+            <div class="field"><label>Montant en UV</label><input name="montant_uv" type="number" min="0.01" step="any" required placeholder="ex : 50000"></div>
+            <div class="field"><label>Montant en FCFA correspondant</label><input name="montant_fcfa" type="number" min="0" step="any" placeholder="ex : 50000"></div>
+            <div class="field span2" style="flex-direction:row;align-items:center;gap:8px;display:flex">
+              <input type="checkbox" name="paid_now" id="paid_now" style="width:auto">
+              <label for="paid_now" style="margin:0">Le PDV a déjà payé (encaissement immédiat)</label>
+            </div>
+          </div>
+          <div style="padding:0 0 6px;color:var(--ink-soft);font-size:11px">Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée — même jour ou plus tard.</div>
+          <div class="msg" data-msg></div>
+          <div class="form-actions"><button class="btn" type="submit">Enregistrer la recharge</button></div>
+        </form>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Historique des recharges</h3><span class="hint">${list.length} recharge(s)</span></div>
+        ${renderRechargeTable(list, true)}
+      </div>`;
   }
 
   /* Icônes des boutons d'action (tableau Équipe) */
@@ -867,10 +924,13 @@
       } else {
         var zoneRow='';
         if(u.role==='COMMERCIAL'){ zoneRow = '<dt>Zone</dt><dd>'+(u.zone_info?(esc(u.zone_info.nom)+' <span class="pill" style="background:var(--pos-soft);color:var(--pos)">'+(u.zone_info.est_chef?'chef de zone':'suppléant')+'</span>'+(u.zone_info.quartiers?'<div style="color:var(--ink-soft);font-size:11px;margin-top:3px">Quartiers : '+esc(u.zone_info.quartiers)+'</div>':'')):'<span style="color:var(--ink-faint)">non affecté</span>')+'</dd>'; }
+        var fundRow='';
+        if(u.role==='MASTER'){ fundRow = '<dt>Fonds UV</dt><dd><b>'+esc(u.solde_uv||0)+'</b> UV</dd>'+
+          '<dt>Fonds FCFA</dt><dd><b>'+fmtFcfa(u.solde_fcfa)+'</b> FCFA</dd>'; }
         rows = '<dt>Nom</dt><dd>'+esc(u.nom||'—')+'</dd>'+
           '<dt>Prénoms</dt><dd>'+esc(u.prenoms||'—')+'</dd>'+
           '<dt>Contact</dt><dd>'+esc(u.contact||'—')+'</dd>'+
-          zoneRow+
+          zoneRow+fundRow+
           '<dt>Identifiant</dt><dd>'+esc(u.username)+'</dd>'+
           '<dt>Statut</dt><dd>'+statut+'</dd>'+posCell;
       }
@@ -879,12 +939,61 @@
       if(u.piece_recto) photos+='<figure><img src="'+u.piece_recto+'"><figcaption>Pièce / permis — recto</figcaption></figure>';
       if(u.piece_verso) photos+='<figure><img src="'+u.piece_verso+'"><figcaption>Pièce / permis — verso</figcaption></figure>';
       const ptitle = isPDV ? 'Photo du local' : 'Pièce / permis';
+      const isSupOwner = S.auth.user.role==='SUPERVISEUR';
+      const masterActions = (isSupOwner && u.role==='MASTER')
+        ? '<div class="form-actions" style="justify-content:flex-start;gap:8px">'+
+            '<button type="button" class="btn small" data-creditmaster="'+u.id+'">+ Créditer le fonds</button>'+
+            '<button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="'+u.id+'">Historique des recharges</button>'+
+          '</div>' : '';
       $('modal').innerHTML='<div class="modal-head"><h3>'+esc(disp)+'</h3><button class="x" data-close>✕</button></div>'+
-        '<div class="modal-body">'+idPhoto+'<dl class="dl">'+rows+'</dl>'+
+        '<div class="modal-body">'+idPhoto+'<dl class="dl">'+rows+'</dl>'+masterActions+
         (photos?'<div class="det-photos-title">'+ptitle+'</div><div class="det-photos">'+photos+'</div>':'')+'</div>';
       $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
+      const cb=$('modal').querySelector('[data-creditmaster]'); if(cb) cb.addEventListener('click',()=>openCreditMaster(u.id, disp));
+      const hb=$('modal').querySelector('[data-masterhistory]'); if(hb) hb.addEventListener('click',()=>openMasterHistory(u.id, disp));
       $('overlay').classList.add('open');
     }catch(err){ dlgError('Erreur', err.message); }
+  }
+
+  function fmtFcfa(v){ return Number(v||0).toLocaleString('fr-FR'); }
+  function fmtUv(v){ return Number(v||0).toLocaleString('fr-FR'); }
+
+  /* ---------- SUPERVISEUR : créditer le fonds d'un Master ---------- */
+  function openCreditMaster(id, dispName){
+    $('modal').innerHTML='<div class="modal-head"><h3>Créditer — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
+      '<div class="modal-body" style="text-align:left"><form data-form-credit>'+
+        '<div class="form-grid">'+
+          '<div class="field"><label>Montant en UV à ajouter</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>'+
+          '<div class="field"><label>Montant en FCFA à ajouter</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>'+
+        '</div>'+
+        '<div class="msg" data-msg></div>'+
+        '<div class="form-actions"><button class="btn" type="submit">Créditer le fonds</button></div>'+
+      '</form></div>';
+    const box=$('modal'); box.querySelector('[data-close]').addEventListener('click',closeModal);
+    box.querySelector('form[data-form-credit]').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg=box.querySelector('[data-msg]'); msg.textContent='Enregistrement…'; msg.className='msg';
+      const d=Object.fromEntries(new FormData(e.target).entries());
+      try{
+        await api('/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        msg.textContent='✔ Fonds crédité avec succès'; msg.className='msg ok';
+        S.users=await api('/users'); if(S.view==='equipe') renderView();
+        setTimeout(closeModal,700);
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
+    });
+    $('overlay').classList.add('open');
+  }
+
+  /* ---------- SUPERVISEUR : historique des recharges d'un Master ---------- */
+  async function openMasterHistory(id, dispName){
+    $('modal').innerHTML='<div class="modal-head"><h3>Recharges — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
+      '<div class="modal-body"><div style="padding:10px 0;color:var(--ink-soft);font-size:11px">Chargement…</div></div>';
+    $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
+    $('overlay').classList.add('open');
+    try{
+      const list=await api('/users/'+id+'/recharges');
+      $('modal').querySelector('.modal-body').innerHTML=renderRechargeTable(list, false);
+    }catch(err){ $('modal').querySelector('.modal-body').innerHTML='<div class="msg err" style="padding:10px 0">'+esc(err.message)+'</div>'; }
   }
 
     /* ---------- MODIFIER UN COMPTE ---------- */
@@ -1024,6 +1133,25 @@
       try{ await api('/zones/'+b.dataset.delzone,{method:'DELETE'}); S.zones=await api('/zones'); renderView(); }
       catch(err){ b.disabled=false; dlgError('Erreur', err.message); }
     }));
+    // ---- Recharges UV (Master) ----
+    const rf=document.querySelector('form[data-form-recharge]');
+    if(rf){ rf.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg=rf.querySelector('[data-msg]'); msg.textContent='Enregistrement…'; msg.className='msg';
+      const fd=new FormData(rf); const d=Object.fromEntries(fd.entries()); d.paid_now = fd.get('paid_now')==='on';
+      const submitBtn=rf.querySelector('button[type=submit]'); submitBtn.disabled=true;
+      try{
+        await api('/master/recharges',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        msg.textContent='✔ Recharge enregistrée'; msg.className='msg ok';
+        await loadMasterData(); renderView();
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; submitBtn.disabled=false; }
+    }); }
+    document.querySelectorAll('[data-payrecharge]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Marquer cette recharge comme payée ?','Le montant en FCFA sera ajouté à ton fonds encaissé.',{type:'success',okText:'Confirmer le paiement'});
+      if(!ok) return; b.disabled=true; b.textContent='…';
+      try{ await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST'}); await loadMasterData(); renderView(); }
+      catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
+    }));
   }
 
   /* ---------- TEMPS RÉEL (WebSocket) ---------- */
@@ -1057,6 +1185,24 @@
           const badge=document.querySelector('[data-loc-live="'+d.userId+'"]');
           if(badge) badge.innerHTML=mapLink(d.lat,d.lng)+'<span class="loc-fresh">● en direct</span>';
         }
+      } else if(d.type==='fund_credited'){
+        // Le superviseur vient de créditer le fonds du Master connecté
+        vibrate([60,40,60]);
+        S.masterFund=d.fund;
+        dlgSuccess('Fonds crédité', 'Le superviseur a crédité ton fonds : +'+fmtUv(d.uv)+' UV, +'+fmtFcfa(d.fcfa)+' FCFA.');
+        if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
+      } else if(d.type==='recharge_alert'){
+        // Recharge restée en attente depuis un jour précédent — alerte, elle reste "en attente"
+        vibrate([100,60,100,60,100]);
+        const rc=d.recharge||{};
+        const who=rc.nom_commercial||rc.pdv_username||rc.master_username||'';
+        dlgError('Recharge en attente', 'Une recharge de '+fmtUv(rc.montant_uv)+' UV ('+who+') n\'a toujours pas été payée. Elle reste en attente jusqu\'au règlement.');
+        if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
+      } else if(d.type==='recharge_created' || d.type==='recharge_paid'){
+        // Suivi en direct côté superviseur (aucun rechargement de page nécessaire)
+        if(S.auth && S.auth.user.role==='SUPERVISEUR'){
+          // rien à recalculer côté liste équipe sans requête ; on rafraîchit juste si un modal Master est ouvert
+        }
       }
     };
     LIVE.onclose=()=>{ clearTimeout(liveRetryTimer); if(S.auth) liveRetryTimer=setTimeout(connectLive,3000); };
@@ -1082,6 +1228,35 @@
   function stopLocationTracking(){ if(geoWatchId!==null){ try{ navigator.geolocation.clearWatch(geoWatchId); }catch(e){} geoWatchId=null; } }
   function mapLink(lat,lng){ if(lat==null||lng==null) return '<span style="color:var(--ink-faint)">Position inconnue</span>'; return '<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+lat+','+lng+'">'+lat.toFixed(5)+', '+lng.toFixed(5)+' — voir sur la carte</a>'; }
   function timeAgo(iso){ if(!iso) return '—'; const s=Math.floor((Date.now()-new Date(iso).getTime())/1000); if(s<60) return 'à l\'instant'; if(s<3600) return 'il y a '+Math.floor(s/60)+' min'; if(s<86400) return 'il y a '+Math.floor(s/3600)+' h'; return 'il y a '+Math.floor(s/86400)+' j'; }
+
+  /* ---------- RECHARGES UV : helpers d'affichage partagés (Master + Superviseur) ---------- */
+  function isOverdue(rc){
+    if(rc.statut!=='EN_ATTENTE') return false;
+    var d=new Date(rc.created_at), now=new Date();
+    return d.getFullYear()!==now.getFullYear() || d.getMonth()!==now.getMonth() || d.getDate()!==now.getDate();
+  }
+  function statutBadge(rc){
+    if(rc.statut==='PAYE') return '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Payé</span>';
+    if(isOverdue(rc)) return '<span class="pill" style="background:var(--red-soft);color:var(--red)">En retard</span>';
+    return '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">En attente</span>';
+  }
+  function renderRechargeTable(list, showPayAction){
+    list=list||[];
+    return '<div class="table-wrap"><table>'+
+      '<thead><tr><th>Point de vente</th><th>UV</th><th>FCFA</th><th>Statut</th><th>Date</th>'+(showPayAction?'<th>Actions</th>':'')+'</tr></thead>'+
+      '<tbody>'+(list.length?list.map(function(rc){
+        var pdv=rc.nom_commercial||rc.pdv_username||'—';
+        return '<tr>'+
+          '<td>'+esc(pdv)+'</td>'+
+          '<td>'+fmtUv(rc.montant_uv)+'</td>'+
+          '<td>'+fmtFcfa(rc.montant_fcfa)+'</td>'+
+          '<td>'+statutBadge(rc)+'</td>'+
+          '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(rc.created_at)+'</td>'+
+          (showPayAction?('<td>'+(rc.statut==='EN_ATTENTE'?'<button class="btn small" data-payrecharge="'+rc.id+'">Marquer payé</button>':'—')+'</td>'):'')+
+        '</tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="'+(showPayAction?6:5)+'">Aucune recharge enregistrée</td></tr>')+'</tbody>'+
+    '</table></div>';
+  }
 
   /* ---------- START ---------- */
   async function startApp(){
