@@ -24,7 +24,9 @@
     --radius:14px;
   }
   *{box-sizing:border-box;}
-  html,body{margin:0;height:100%;}
+  html,body{margin:0;height:100%;overscroll-behavior:none;}
+  html{ -webkit-text-size-adjust:100%; }
+  body{ overscroll-behavior-y:contain; touch-action:pan-x pan-y; }
   body{font-family:var(--body);font-size:12px;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;}
 
   /* ============ LOGIN ============ */
@@ -520,6 +522,7 @@
         }
         clientFails=0;
         S.auth={token:d.token,user:d.user};
+        try{ localStorage.setItem('gam_tok', d.token); }catch(e){}
         if(d.user.mustChangePassword){ showForcePassword(); }
         else{ await startApp(); }
       }catch(err){ vibrate(200); shakeField('login-user'); shakeField('login-pass'); msg.textContent=err.message||'Erreur réseau'; btn.disabled=false; btn.textContent='Se connecter'; }
@@ -549,6 +552,7 @@
   }
   async function doLogout(expired){
     disconnectLive(); stopLocationTracking();
+    try{ localStorage.removeItem('gam_tok'); }catch(e){}
     try{ if(!expired && S.auth) await fetch(API+'/logout',{method:'POST',headers:{'Authorization':'Bearer '+S.auth.token}}); }catch(e){}
     S.auth=null; showLogin(); closeSidebar();
     clearInterval(lockTimer); $('lock-box').style.display='none';
@@ -978,18 +982,30 @@
     await setView('dashboard');
   }
 
-  function init(){
+  // Anti-plantage : aucune erreur ne doit fermer/bloquer l'app
+  window.addEventListener('error', function(){ });
+  window.addEventListener('unhandledrejection', function(e){ try{ e.preventDefault(); }catch(_){} });
+  async function init(){
+    try{
     $('today').textContent=new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
     setupLogin();
     setupForcePassword();
     $('menu-toggle').addEventListener('click',toggleSidebar);
     $('backdrop').addEventListener('click',closeSidebar);
     $('overlay').addEventListener('click',e=>{ if(e.target===$('overlay')) closeModal(); });
-    showLogin();
     // PWA : installation "vraie application"
     if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{})); }
     const ib=$('install-btn');
     if(ib) ib.addEventListener('click', async ()=>{ if(!deferredPrompt) return; deferredPrompt.prompt(); try{ await deferredPrompt.userChoice; }catch(e){} deferredPrompt=null; ib.style.display='none'; });
+    // Session persistante : reconnexion automatique (plus besoin de se reconnecter au relancement)
+    let tok=null; try{ tok=localStorage.getItem('gam_tok'); }catch(e){}
+    if(tok){
+      S.auth={token:tok};
+      try{ const me=await api('/me'); S.auth={token:tok, user:me}; if(me.mustChangePassword){ showForcePassword(); } else { await startApp(); } return; }
+      catch(e){ try{ localStorage.removeItem('gam_tok'); }catch(_){} S.auth=null; }
+    }
+    showLogin();
+    }catch(err){ try{ showLogin(); }catch(_){} }
   }
   init();
 </script>
