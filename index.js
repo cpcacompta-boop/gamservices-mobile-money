@@ -530,6 +530,15 @@ app.get('/masters/stats', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   res.json(r.rows[0]);
 }));
 
+// Historique global de tous les versements (crédits) faits par le superviseur, tous Masters confondus
+app.get('/masters/credits', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT fc.*, u.username, u.nom, u.prenoms
+     FROM fund_credits fc JOIN users u ON u.id = fc.master_id
+     ORDER BY fc.created_at DESC LIMIT 300`);
+  res.json(r.rows);
+}));
+
 // Recherche de Masters par nom/prénom/identifiant — pagination légère (20 résultats max), jamais de liste complète
 app.get('/masters/search', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const q = String(req.query.q || '').trim();
