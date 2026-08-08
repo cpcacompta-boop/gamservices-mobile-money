@@ -1607,7 +1607,7 @@
           '<td>'+esc(pdv)+'</td>'+
           '<td>'+typeBadge(rc)+'</td>'+
           '<td>'+(rc.type_fonds==='FCFA'?'—':fmtUv(rc.montant_uv))+'</td>'+
-          '<td>'+fmtFcfa(rc.montant_fcfa)+'</td>'+
+          '<td>'+(rc.statut==='PAYE'?fmtFcfa(rc.montant_fcfa):'—')+'</td>'+
           '<td>'+statutBadge(rc)+'</td>'+
           '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(rc.created_at)+'</td>'+
           (showPayAction?('<td>'+(rc.statut==='EN_ATTENTE'?'<button class="btn small" data-payrecharge="'+rc.id+'">Marquer '+(rc.type_fonds==='FCFA'?'remboursé':'payé')+'</button>':'—')+'</td>'):'')+
