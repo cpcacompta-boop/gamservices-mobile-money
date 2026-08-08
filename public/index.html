@@ -734,6 +734,7 @@
           <div class="msg" data-msg-return></div>
         </div>
         <div class="fonds-card-foot">
+          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-mastercredits="${m.id}" data-uname="${esc(nom)}">Historique des versements</button>
           <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="${m.id}" data-uname="${esc(nom)}">Historique des recharges</button>
           <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterreturns="${m.id}" data-uname="${esc(nom)}">Historique des retours</button>
           <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--ink-soft);border:1px solid var(--line)" data-clearmaster="1">✕ Changer de Master</button>
@@ -1084,6 +1085,7 @@
       const masterActions = (isSupOwner && u.role==='MASTER')
         ? '<div class="form-actions" style="justify-content:flex-start;gap:8px">'+
             '<button type="button" class="btn small" data-creditmaster="'+u.id+'">+ Créditer le fonds</button>'+
+            '<button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-mastercredits="'+u.id+'">Historique des versements</button>'+
             '<button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="'+u.id+'">Historique des recharges</button>'+
           '</div>' : '';
       $('modal').innerHTML='<div class="modal-head"><h3>'+esc(disp)+'</h3><button class="x" data-close>✕</button></div>'+
@@ -1091,6 +1093,7 @@
         (photos?'<div class="det-photos-title">'+ptitle+'</div><div class="det-photos">'+photos+'</div>':'')+'</div>';
       $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
       const cb=$('modal').querySelector('[data-creditmaster]'); if(cb) cb.addEventListener('click',()=>openCreditMaster(u.id, disp));
+      const crb=$('modal').querySelector('[data-mastercredits]'); if(crb) crb.addEventListener('click',()=>openMasterCredits(u.id, disp));
       const hb=$('modal').querySelector('[data-masterhistory]'); if(hb) hb.addEventListener('click',()=>openMasterHistory(u.id, disp));
       $('overlay').classList.add('open');
     }catch(err){ dlgError('Erreur', err.message); }
@@ -1123,6 +1126,18 @@
       }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; }
     });
     $('overlay').classList.add('open');
+  }
+
+  /* ---------- SUPERVISEUR : historique des versements (crédits) accordés à un Master ---------- */
+  async function openMasterCredits(id, dispName){
+    $('modal').innerHTML='<div class="modal-head"><h3>Versements — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
+      '<div class="modal-body"><div style="padding:10px 0;color:var(--ink-soft);font-size:11px">Chargement…</div></div>';
+    $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
+    $('overlay').classList.add('open');
+    try{
+      const list=await api('/users/'+id+'/credits');
+      $('modal').querySelector('.modal-body').innerHTML=renderCreditTable(list);
+    }catch(err){ $('modal').querySelector('.modal-body').innerHTML='<div class="msg err" style="padding:10px 0">'+esc(err.message)+'</div>'; }
   }
 
   /* ---------- SUPERVISEUR : historique des recharges d'un Master ---------- */
@@ -1421,6 +1436,8 @@
         dlgSuccess('Retrait effectué', 'Le fonds a été mis à jour avec succès.');
       }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
     }); }
+    const crb=scope.querySelector('[data-mastercredits]');
+    if(crb) crb.addEventListener('click',()=>openMasterCredits(crb.dataset.mastercredits, crb.dataset.uname||''));
     const hb=scope.querySelector('[data-masterhistory]');
     if(hb) hb.addEventListener('click',()=>openMasterHistory(hb.dataset.masterhistory, hb.dataset.uname||''));
     const rb=scope.querySelector('[data-masterreturns]');
@@ -1542,6 +1559,20 @@
           (showPayAction?('<td>'+(rc.statut==='EN_ATTENTE'?'<button class="btn small" data-payrecharge="'+rc.id+'">Marquer payé</button>':'—')+'</td>'):'')+
         '</tr>';
       }).join(''):'<tr class="empty-row"><td colspan="'+(showPayAction?6:5)+'">Aucune recharge enregistrée</td></tr>')+'</tbody>'+
+    '</table></div>';
+  }
+
+  function renderCreditTable(list){
+    list=list||[];
+    return '<div class="table-wrap"><table>'+
+      '<thead><tr><th>UV versé</th><th>Espèce (FCFA) versé</th><th>Date</th></tr></thead>'+
+      '<tbody>'+(list.length?list.map(function(fc){
+        return '<tr>'+
+          '<td>'+fmtUv(fc.uv)+'</td>'+
+          '<td>'+fmtFcfa(fc.fcfa)+'</td>'+
+          '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(fc.created_at)+'</td>'+
+        '</tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="3">Aucun versement enregistré</td></tr>')+'</tbody>'+
     '</table></div>';
   }
 
