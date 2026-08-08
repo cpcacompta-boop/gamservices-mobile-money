@@ -351,7 +351,7 @@ app.delete('/zones/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
    ===================================================================== */
 const numOrNaN = (v) => { const n = Number(v); return isFinite(n) ? n : NaN; };
 
-// Le Master consulte son propre fonds (solde UV disponible, solde FCFA encaissé, fonds de commerce total)
+// Le Master consulte son propre fonds (solde UV disponible, solde FCFA encaissé, fonds total)
 app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
   const r = await pool.query(`
     SELECT u.solde_uv, u.solde_fcfa,
@@ -382,7 +382,7 @@ app.get('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
 
 // Le Master enregistre une vente/recharge d'UV à un PDV (suite à son appel téléphonique)
 // RÈGLE MÉTIER FERME : 1 UV vendu = 1 FCFA dû par le PDV. Le montant FCFA n'est jamais
-// saisi séparément : il est TOUJOURS égal au montant en UV, pour que le fonds de commerce
+// saisi séparément : il est TOUJOURS égal au montant en UV, pour que le fonds total
 // (UV restant + FCFA encaissé) corresponde exactement, à tout moment, au total crédité par
 // le superviseur — sans quoi le Master ne pourrait jamais détecter un manquant.
 app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
