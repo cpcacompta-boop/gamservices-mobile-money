@@ -633,6 +633,7 @@
     }
     if(v==='fonds'){
       try{ S.fondsStats=await api('/masters/stats'); }catch(e){ dlgError('Chargement', 'Impossible de charger les statistiques : '+(e.message||'')); S.fondsStats=S.fondsStats||{count:0,total_uv:0,total_fcfa:0,total_en_attente:0,total_en_retard:0}; }
+      try{ S.allCredits=await api('/masters/credits'); }catch(e){ S.allCredits=S.allCredits||[]; }
       if(S.fondsSelectedId){ try{ S.fondsSelectedDetail=await api('/masters/'+S.fondsSelectedId+'/summary'); }catch(e){ S.fondsSelectedId=null; S.fondsSelectedDetail=null; } }
     }
     if((v==='recharges' || v==='dashboard') && S.auth.user.role==='MASTER'){ await loadMasterData(); }
@@ -759,7 +760,11 @@
     const detail = S.fondsSelectedDetail
       ? `<div data-master-detail>${fondsMasterCardHtml(S.fondsSelectedDetail)}</div>`
       : `<div data-master-detail><div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:11px;line-height:1.6;text-align:center">👆 Recherche et sélectionne un Master ci-dessus pour consulter et créditer son fonds.</div></div></div>`;
-    return header+search+detail;
+    const allCredits=`<div class="panel" data-all-credits>
+        <div class="panel-head"><h3>Historique des versements</h3><span class="hint">Tous les Masters — pour vérifier combien a été donné à qui</span></div>
+        ${renderAllCreditsTable(S.allCredits)}
+      </div>`;
+    return header+search+detail+allCredits;
   }
   function renderRecharges(){
     const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,total_retourne:0,fonds_total:0,en_circulation:0};
@@ -1413,6 +1418,9 @@
         await api('/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
         S.fondsStats=await api('/masters/stats');
         const statRow=document.querySelector('.stat-row'); if(statRow) statRow.outerHTML=renderFondsStatsRow();
+        try{ S.allCredits=await api('/masters/credits'); }catch(e){}
+        const acBox=document.querySelector('[data-all-credits]');
+        if(acBox) acBox.querySelector('.table-wrap').outerHTML=renderAllCreditsTable(S.allCredits);
         await selectMaster(id);
         dlgSuccess('Fonds crédité', 'Le fonds a été mis à jour avec succès.');
       }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
@@ -1559,6 +1567,22 @@
           (showPayAction?('<td>'+(rc.statut==='EN_ATTENTE'?'<button class="btn small" data-payrecharge="'+rc.id+'">Marquer payé</button>':'—')+'</td>'):'')+
         '</tr>';
       }).join(''):'<tr class="empty-row"><td colspan="'+(showPayAction?6:5)+'">Aucune recharge enregistrée</td></tr>')+'</tbody>'+
+    '</table></div>';
+  }
+
+  function renderAllCreditsTable(list){
+    list=list||[];
+    return '<div class="table-wrap"><table>'+
+      '<thead><tr><th>Master</th><th>UV versé</th><th>Espèce (FCFA) versé</th><th>Date</th></tr></thead>'+
+      '<tbody>'+(list.length?list.map(function(fc){
+        const nom=[fc.nom,fc.prenoms].filter(Boolean).join(' ')||fc.username;
+        return '<tr>'+
+          '<td>'+esc(nom)+'</td>'+
+          '<td>'+fmtUv(fc.uv)+'</td>'+
+          '<td>'+fmtFcfa(fc.fcfa)+'</td>'+
+          '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(fc.created_at)+'</td>'+
+        '</tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="4">Aucun versement enregistré</td></tr>')+'</tbody>'+
     '</table></div>';
   }
 
