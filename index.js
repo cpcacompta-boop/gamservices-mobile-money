@@ -153,6 +153,9 @@ async function migrate() {
     paid_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
+  // Type de recharge : 'UV' (le Master puise dans son stock UV, cas historique) ou
+  // 'FCFA' (le Master avance directement du cash à un PDV — même processus, autre fonds).
+  await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS type_fonds TEXT NOT NULL DEFAULT 'UV'`);
   await pool.query(`CREATE INDEX IF NOT EXISTS uv_recharges_master ON uv_recharges(master_id, created_at DESC)`);
   await seedSuperviseur();
   console.log('\u2714 Migration terminee : base a jour.');
@@ -362,21 +365,41 @@ app.delete('/zones/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
    ===================================================================== */
 const numOrNaN = (v) => { const n = Number(v); return isFinite(n) ? n : NaN; };
 
+// Calcule, à partir des soldes + de l'historique, où se trouve un éventuel manquant :
+// séparément dans le fonds UV et dans le fonds FCFA (et plus seulement un chiffre global),
+// car un Master peut désormais aussi recharger un PDV directement en FCFA (type_fonds='FCFA').
+function computeFundBreakdown(row) {
+  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
+  row.total_credite = Number(row.total_credite_uv) + Number(row.total_credite_fcfa);
+  row.total_retourne = Number(row.total_retourne_uv) + Number(row.total_retourne_fcfa);
+
+  // Fonds UV : ce qui a été crédité en UV, moins ce qui a été retourné en UV, moins ce qu'il reste en stock UV
+  row.en_circulation_uv = Number(row.total_credite_uv) - Number(row.total_retourne_uv) - Number(row.solde_uv);
+  row.manquant_uv = Math.max(0, row.en_circulation_uv - Number(row.en_attente_uv));
+
+  // Fonds FCFA : idem, mais côté cash direct (recharges type_fonds='FCFA' encore en attente de remboursement)
+  row.en_circulation_fcfa = Number(row.total_credite_fcfa) - Number(row.total_retourne_fcfa) - Number(row.solde_fcfa);
+  row.manquant_fcfa = Math.max(0, row.en_circulation_fcfa - Number(row.en_attente_fcfa));
+
+  // Total global (rétro-compatibilité avec l'affichage existant)
+  row.en_circulation = row.en_circulation_uv + row.en_circulation_fcfa;
+  row.manquant = row.manquant_uv + row.manquant_fcfa;
+  return row;
+}
+
 // Le Master consulte son propre fonds (solde UV disponible, solde FCFA encaissé, fonds total)
 app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
   const r = await pool.query(`
     SELECT u.solde_uv, u.solde_fcfa,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne,
-      COALESCE((SELECT SUM(montant_uv) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE'), 0) AS en_attente_reel
+      COALESCE((SELECT SUM(uv) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_uv,
+      COALESCE((SELECT SUM(fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_fcfa,
+      COALESCE((SELECT SUM(uv) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_uv,
+      COALESCE((SELECT SUM(fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_fcfa,
+      COALESCE((SELECT SUM(montant_uv) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE' AND type_fonds='UV'), 0) AS en_attente_uv,
+      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE' AND type_fonds='FCFA'), 0) AS en_attente_fcfa
     FROM users u WHERE u.id=$1`, [req.user.id]);
-  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite: 0, total_retourne: 0, en_attente_reel: 0 };
-  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
-  // Ce qui devrait manquer en caisse = ce qui est chez les PDV (recharges encore en attente de paiement)
-  row.en_circulation = Number(row.total_credite) - Number(row.total_retourne) - row.fonds_total;
-  // Manquant = écart non expliqué par les recharges en attente (si > 0, de l'argent est introuvable)
-  row.manquant = Math.max(0, row.en_circulation - Number(row.en_attente_reel));
-  res.json(row);
+  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite_uv: 0, total_credite_fcfa: 0, total_retourne_uv: 0, total_retourne_fcfa: 0, en_attente_uv: 0, en_attente_fcfa: 0 };
+  res.json(computeFundBreakdown(row));
 }));
 
 // Liste des PDV disponibles pour une recharge (aucune restriction de zone/quartier)
@@ -396,34 +419,53 @@ app.get('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   res.json(r.rows);
 }));
 
-// Le Master enregistre une vente/recharge d'UV à un PDV (suite à son appel téléphonique)
-// RÈGLE MÉTIER FERME : 1 UV vendu = 1 FCFA dû par le PDV. Le montant FCFA n'est jamais
-// saisi séparément : il est TOUJOURS égal au montant en UV, pour que le fonds total
-// (UV restant + FCFA encaissé) corresponde exactement, à tout moment, au total crédité par
-// le superviseur — sans quoi le Master ne pourrait jamais détecter un manquant.
+// Le Master enregistre une vente/recharge à un PDV (suite à son appel téléphonique).
+// Deux types possibles (même processus, fonds différent) :
+//  - type_fonds='UV'   : le Master vend de l'UV au PDV. RÈGLE FERME : 1 UV vendu = 1 FCFA dû,
+//                        jamais saisi séparément, pour que le fonds total corresponde toujours
+//                        exactement au total crédité par le superviseur.
+//  - type_fonds='FCFA' : le Master avance directement du cash (FCFA) au PDV. On débite alors
+//                        son fonds FCFA (et non plus le fonds UV) pour le même montant.
+// Dans les deux cas, quand le PDV règle (paidNow ou plus tard via /pay), le montant revient
+// dans le fonds FCFA du Master (paiement toujours en cash).
 app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const pdvId = Number(req.body.pdv_id);
-  const uv = numOrNaN(req.body.montant_uv);
-  const fcfa = uv; // toujours 1:1 avec l'UV — jamais une valeur indépendante
+  const typeFonds = req.body.type_fonds === 'FCFA' ? 'FCFA' : 'UV';
+  const montant = numOrNaN(req.body.montant_uv);
   const paidNow = !!req.body.paid_now;
-  if (!pdvId || !(uv > 0)) return res.status(400).json({ error: 'Le point de vente et le montant en UV sont obligatoires' });
+  if (!pdvId || !(montant > 0)) return res.status(400).json({ error: 'Le point de vente et le montant sont obligatoires' });
 
   const pdv = await pool.query("SELECT id FROM users WHERE id=$1 AND role='PDV' AND actif=TRUE", [pdvId]);
   if (!pdv.rows.length) return res.status(404).json({ error: 'Point de vente introuvable' });
 
-  const m = await pool.query('SELECT solde_uv FROM users WHERE id=$1', [req.user.id]);
+  const m = await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [req.user.id]);
   const soldeUv = Number(m.rows[0].solde_uv || 0);
-  if (soldeUv < uv) return res.status(400).json({ error: 'Fonds UV insuffisant (solde disponible : ' + soldeUv + ')' });
+  const soldeFcfa = Number(m.rows[0].solde_fcfa || 0);
+  if (typeFonds === 'UV' && soldeUv < montant) return res.status(400).json({ error: 'Fonds UV insuffisant (solde disponible : ' + soldeUv + ')' });
+  if (typeFonds === 'FCFA' && soldeFcfa < montant) return res.status(400).json({ error: 'Fonds FCFA insuffisant (solde disponible : ' + soldeFcfa + ')' });
+
+  // Colonnes de traçabilité : montant_uv reste rempli pour l'UV (0 pour une avance FCFA directe),
+  // montant_fcfa porte toujours le montant dû/avancé en FCFA (1 UV = 1 FCFA).
+  const montantUvCol = typeFonds === 'UV' ? montant : 0;
+  const montantFcfaCol = montant;
 
   const statut = paidNow ? 'PAYE' : 'EN_ATTENTE';
   const r = await pool.query(
-    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, paid_at)
-     VALUES ($1,$2,$3,$4,$5,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
-    [req.user.id, pdvId, uv, fcfa, statut]);
+    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, type_fonds, paid_at)
+     VALUES ($1,$2,$3,$4,$5,$6,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
+    [req.user.id, pdvId, montantUvCol, montantFcfaCol, statut, typeFonds]);
 
-  const fund = paidNow
-    ? await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa', [uv, fcfa, req.user.id])
-    : await pool.query('UPDATE users SET solde_uv=solde_uv-$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [uv, req.user.id]);
+  let fund;
+  if (typeFonds === 'UV') {
+    fund = paidNow
+      ? await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa', [montant, montant, req.user.id])
+      : await pool.query('UPDATE users SET solde_uv=solde_uv-$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
+  } else {
+    // Avance FCFA directe : débit immédiat du fonds FCFA, remboursement immédiat si déjà payé (net = 0)
+    fund = paidNow
+      ? await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [req.user.id])
+      : await pool.query('UPDATE users SET solde_fcfa=solde_fcfa-$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
+  }
 
   broadcastToSupervisors({ type: 'recharge_created', masterId: req.user.id, recharge: r.rows[0] });
   res.json({ ok: true, recharge: r.rows[0], fund: fund.rows[0] });
@@ -568,19 +610,18 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
       COUNT(rc.id) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.created_at < date_trunc('day', now())) AS en_retard,
       COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.created_at >= date_trunc('day', now())), 0) AS uv_du_jour,
       MAX(rc.created_at) AS derniere_recharge,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne,
-      COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.statut='EN_ATTENTE'), 0) AS en_attente_reel
+      COALESCE((SELECT SUM(uv) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_uv,
+      COALESCE((SELECT SUM(fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_fcfa,
+      COALESCE((SELECT SUM(uv) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_uv,
+      COALESCE((SELECT SUM(fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_fcfa,
+      COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.type_fonds='UV'), 0) AS en_attente_uv,
+      COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.type_fonds='FCFA'), 0) AS en_attente_fcfa
     FROM users u
     LEFT JOIN uv_recharges rc ON rc.master_id = u.id
     WHERE u.id=$1 AND u.role='MASTER'
     GROUP BY u.id`, [req.params.id]);
   if (!r.rows.length) return res.status(404).json({ error: 'Master introuvable' });
-  const row = r.rows[0];
-  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
-  row.en_circulation = Number(row.total_credite) - Number(row.total_retourne) - row.fonds_total;
-  row.manquant = Math.max(0, row.en_circulation - Number(row.en_attente_reel));
-  res.json(row);
+  res.json(computeFundBreakdown(r.rows[0]));
 }));
 
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
