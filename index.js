@@ -358,8 +358,11 @@ app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
       COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite
     FROM users u WHERE u.id=$1`, [req.user.id]);
   const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite: 0 };
-  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
-  row.en_circulation = Number(row.total_credite) - row.fonds_total; // argent chez des PDV, pas encore payé
+  row.solde_uv = Number(row.solde_uv || 0);
+  row.solde_fcfa = Number(row.solde_fcfa || 0);
+  row.total_credite = Number(row.total_credite || 0);
+  row.fonds_total = row.solde_uv + row.solde_fcfa;
+  row.en_circulation = row.total_credite - row.fonds_total; // argent chez des PDV, pas encore payé
   res.json(row);
 }));
 
@@ -462,7 +465,15 @@ app.get('/masters/stats', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
       (SELECT COUNT(*) FROM uv_recharges rc JOIN users m ON m.id=rc.master_id WHERE m.role='MASTER' AND rc.statut='EN_ATTENTE') AS total_en_attente,
       (SELECT COUNT(*) FROM uv_recharges rc JOIN users m ON m.id=rc.master_id WHERE m.role='MASTER' AND rc.statut='EN_ATTENTE' AND rc.created_at < date_trunc('day', now())) AS total_en_retard
     FROM users u WHERE u.role='MASTER'`);
-  res.json(r.rows[0]);
+  const st = r.rows[0] || {};
+  res.json({
+    count: Number(st.count || 0),
+    total_uv: Number(st.total_uv || 0),
+    total_fcfa: Number(st.total_fcfa || 0),
+    total_fonds: Number(st.total_uv || 0) + Number(st.total_fcfa || 0),
+    total_en_attente: Number(st.total_en_attente || 0),
+    total_en_retard: Number(st.total_en_retard || 0)
+  });
 }));
 
 // Recherche de Masters par nom/prénom/identifiant — pagination légère (20 résultats max), jamais de liste complète
@@ -497,8 +508,9 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
     GROUP BY u.id`, [req.params.id]);
   if (!r.rows.length) return res.status(404).json({ error: 'Master introuvable' });
   const row = r.rows[0];
-  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
-  row.en_circulation = Number(row.total_credite) - row.fonds_total;
+  ['solde_uv', 'solde_fcfa', 'total_credite', 'en_attente', 'en_retard', 'uv_du_jour'].forEach(k => { row[k] = Number(row[k] || 0); });
+  row.fonds_total = row.solde_uv + row.solde_fcfa;
+  row.en_circulation = row.total_credite - row.fonds_total;
   res.json(row);
 }));
 
