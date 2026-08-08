@@ -716,11 +716,8 @@
           Total crédité depuis le début&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_credite)}</b> FCFA<br>
           Total retourné au superviseur&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_retourne)}</b> FCFA<br>
           En circulation chez les PDV (pas encore réglé)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.en_circulation)}</b> FCFA
-          ${(Number(m.manquant_uv||0)>0 || Number(m.manquant_fcfa||0)>0)
-            ? '<br><span style="color:var(--red);font-weight:700">⚠ Manquant détecté'
-              + (Number(m.manquant_uv||0)>0 ? ' · Fonds UV : '+fmtUv(m.manquant_uv)+' UV' : '')
-              + (Number(m.manquant_fcfa||0)>0 ? ' · Fonds FCFA : '+fmtFcfa(m.manquant_fcfa)+' FCFA' : '')
-              + '</span>'
+          ${Number(m.manquant||0)>0
+            ? '<br><span style="color:var(--red);font-weight:700">⚠ Manquant détecté : '+fmtFcfa(m.manquant)+' FCFA</span>'
             : '<br><span style="color:var(--pos);font-weight:700">✔ Tout est en règle, aucun manque détecté</span>'}
         </div>
         <div class="fonds-card-body">
@@ -1118,22 +1115,20 @@
   function fmtFcfa(v){ return Number(v||0).toLocaleString('fr-FR'); }
   function fmtUv(v){ return Number(v||0).toLocaleString('fr-FR'); }
 
-  // Bandeau de statut du fonds : rouge et détaillé (UV et/ou FCFA) s'il manque quelque chose,
-  // vert si tout est en règle. fund doit porter manquant_uv / manquant_fcfa (voir backend).
+  // Bandeau de statut du fonds : rouge si (Fonds UV + Fonds FCFA) ≠ (Total crédité − Total retourné
+  // − ce qui est encore chez les PDV), vert sinon. On compare UNIQUEMENT la somme globale : l'UV
+  // se transforme en FCFA dès qu'un PDV paie, donc un découpage par fonds donnerait un faux manquant.
   function renderFundStatus(fund){
-    const mUv=Number(fund.manquant_uv||0), mFcfa=Number(fund.manquant_fcfa||0);
-    if(mUv<=0 && mFcfa<=0){
+    const m=Number(fund.manquant||0);
+    if(m<=0){
       return `<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)">
-        <div style="padding:14px 20px;color:var(--pos);font-size:12px;font-weight:700">✔ Tout est en règle&nbsp;: aucun manque détecté, ni dans le fonds UV ni dans le fonds FCFA.</div>
+        <div style="padding:14px 20px;color:var(--pos);font-size:12px;font-weight:700">✔ Tout est en règle&nbsp;: Fonds UV + Fonds FCFA correspond bien au total crédité, aucun manque détecté.</div>
       </div>`;
     }
-    const lines=[];
-    if(mUv>0) lines.push('Fonds <b>UV</b>&nbsp;: <b>'+fmtUv(mUv)+'</b> UV manquant(s)');
-    if(mFcfa>0) lines.push('Fonds <b>FCFA</b>&nbsp;: <b>'+fmtFcfa(mFcfa)+'</b> FCFA manquant(s)');
     return `<div class="panel" style="background:var(--red-soft);border:1px solid var(--red)">
       <div style="padding:14px 20px;color:var(--red);font-size:12px;font-weight:700;line-height:1.9">
-        ⚠ Manquant détecté<br>${lines.join('<br>')}<br>
-        <span style="font-weight:500">Cette somme n'est ni dans le fonds actuel, ni dans une recharge en attente. Vérifie avec le superviseur.</span>
+        ⚠ Manquant détecté&nbsp;: <b>${fmtFcfa(m)}</b> FCFA<br>
+        <span style="font-weight:500">Cette somme n'est ni dans le fonds actuel (UV + FCFA), ni dans une recharge en attente. Vérifie avec le superviseur.</span>
       </div>
     </div>`;
   }
