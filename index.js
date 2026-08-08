@@ -367,11 +367,15 @@ app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
   const r = await pool.query(`
     SELECT u.solde_uv, u.solde_fcfa,
       COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne,
+      COALESCE((SELECT SUM(montant_uv) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE'), 0) AS en_attente_reel
     FROM users u WHERE u.id=$1`, [req.user.id]);
-  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite: 0, total_retourne: 0 };
+  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite: 0, total_retourne: 0, en_attente_reel: 0 };
   row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
-  row.en_circulation = Number(row.total_credite) - Number(row.total_retourne) - row.fonds_total; // argent chez des PDV, pas encore payé
+  // Ce qui devrait manquer en caisse = ce qui est chez les PDV (recharges encore en attente de paiement)
+  row.en_circulation = Number(row.total_credite) - Number(row.total_retourne) - row.fonds_total;
+  // Manquant = écart non expliqué par les recharges en attente (si > 0, de l'argent est introuvable)
+  row.manquant = Math.max(0, row.en_circulation - Number(row.en_attente_reel));
   res.json(row);
 }));
 
@@ -565,7 +569,8 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
       COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.created_at >= date_trunc('day', now())), 0) AS uv_du_jour,
       MAX(rc.created_at) AS derniere_recharge,
       COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne,
+      COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.statut='EN_ATTENTE'), 0) AS en_attente_reel
     FROM users u
     LEFT JOIN uv_recharges rc ON rc.master_id = u.id
     WHERE u.id=$1 AND u.role='MASTER'
@@ -574,6 +579,7 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
   const row = r.rows[0];
   row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
   row.en_circulation = Number(row.total_credite) - Number(row.total_retourne) - row.fonds_total;
+  row.manquant = Math.max(0, row.en_circulation - Number(row.en_attente_reel));
   res.json(row);
 }));
 
