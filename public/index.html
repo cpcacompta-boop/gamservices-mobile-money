@@ -624,6 +624,7 @@
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
     try{ S.pdvs=await api('/pdvs'); }catch(e){ S.pdvs=S.pdvs||[]; }
     try{ S.recharges=await api('/master/recharges'); }catch(e){ S.recharges=S.recharges||[]; }
+    try{ S.returns=await api('/master/returns'); }catch(e){ S.returns=S.returns||[]; }
   }
   async function loadView(v){
     if(v==='equipe' || v==='zones'){
@@ -701,21 +702,31 @@
         <div style="padding:12px 20px;border-bottom:1px solid var(--line);font-size:11px;line-height:1.9;color:var(--ink-soft)">
           Fonds total (UV + FCFA)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.fonds_total)}</b> FCFA<br>
           Total crédité depuis le début&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_credite)}</b> FCFA<br>
+          Total retourné au superviseur&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_retourne)}</b> FCFA<br>
           En circulation chez les PDV (pas encore payé)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.en_circulation)}</b> FCFA
         </div>
         <div class="fonds-card-body">
           <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px">
             ${Number(m.en_attente||0)} recharge(s) en attente · ${fmtUv(m.uv_du_jour)} UV vendus aujourd'hui${m.derniere_recharge?' · dernière recharge '+timeAgo(m.derniere_recharge):''}
           </div>
-          <form data-form-credit-inline data-master="${m.id}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:6px">+ Créditer le fonds</div>
+          <form data-form-credit-inline data-master="${m.id}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
             <div class="field" style="flex:1;min-width:100px"><label>+ UV</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>
             <div class="field" style="flex:1;min-width:100px"><label>+ FCFA</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
             <button class="btn small" type="submit">Créditer</button>
           </form>
-          <div class="msg" data-msg></div>
+          <div class="msg" data-msg-credit></div>
+          <div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin:14px 0 6px;padding-top:12px;border-top:1px dashed var(--line)">− Retirer du fonds (retour)</div>
+          <form data-form-return-inline data-master="${m.id}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div class="field" style="flex:1;min-width:100px"><label>− UV</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>
+            <div class="field" style="flex:1;min-width:100px"><label>− FCFA</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
+            <button class="btn small" type="submit" style="background:var(--red)">Retirer</button>
+          </form>
+          <div class="msg" data-msg-return></div>
         </div>
         <div class="fonds-card-foot">
           <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="${m.id}" data-uname="${esc(nom)}">Historique des recharges</button>
+          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterreturns="${m.id}" data-uname="${esc(nom)}">Historique des retours</button>
           <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--ink-soft);border:1px solid var(--line)" data-clearmaster="1">✕ Changer de Master</button>
         </div>
       </div>`;
@@ -740,36 +751,11 @@
       : `<div data-master-detail><div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:11px;line-height:1.6;text-align:center">👆 Recherche et sélectionne un Master ci-dessus pour consulter et créditer son fonds.</div></div></div>`;
     return header+search+detail;
   }
-  // Recouvrements : ce que les PDV doivent encore (recharges non payées), encaissables n'importe quel jour
-  function renderCollections(){
-    const pending=(S.recharges||[]).filter(r=>r.statut==='EN_ATTENTE');
-    const total=pending.reduce((a,r)=>a+Number(r.montant_uv||0),0);
-    const overdue=pending.filter(isOverdue).length;
-    if(!pending.length){
-      return '<div class="panel"><div class="panel-head"><h3>💰 À encaisser (recouvrements)</h3></div>'+
-        '<div style="padding:18px 20px;color:var(--pos);font-size:11px;font-weight:700">✅ Tout est encaissé — aucun point de vente ne te doit d\'argent.</div></div>';
-    }
-    const rows=pending.map(rc=>{
-      const pdv=rc.nom_commercial||rc.pdv_username||'—'; const od=isOverdue(rc);
-      return '<tr>'+
-        '<td><b>'+esc(pdv)+'</b></td>'+
-        '<td>'+fmtUv(rc.montant_uv)+' UV</td>'+
-        '<td>'+fmtFcfa(rc.montant_fcfa)+' FCFA</td>'+
-        '<td>'+(od?'<span class="pill" style="background:var(--red-soft);color:var(--red)">En retard · '+timeAgo(rc.created_at)+'</span>':'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">'+timeAgo(rc.created_at)+'</span>')+'</td>'+
-        '<td><button class="btn small" data-payrecharge="'+rc.id+'">Encaisser</button></td>'+
-      '</tr>';
-    }).join('');
-    return '<div class="panel" style="border:1px solid '+(overdue?'var(--red)':'var(--warn)')+'">'+
-      '<div class="panel-head"><h3>💰 À encaisser (recouvrements)</h3><span class="hint">'+fmtFcfa(total)+' FCFA à recouvrer'+(overdue?' · <span style="color:var(--red)">'+overdue+' en retard</span>':'')+'</span></div>'+
-      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>UV</th><th>FCFA dû</th><th>Ancienneté</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-      '<div style="padding:12px 20px;color:var(--ink-soft);font-size:11px;line-height:1.6">Quand un PDV te verse l\'argent (même plusieurs jours après la recharge), clique <b>Encaisser</b> : le montant s\'ajoute aussitôt à ton fonds FCFA et sort de « en circulation ».</div>'+
-    '</div>';
-  }
-
-    function renderRecharges(){
-    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,fonds_total:0,en_circulation:0};
+  function renderRecharges(){
+    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,total_retourne:0,fonds_total:0,en_circulation:0};
     const pdvs=S.pdvs||[];
     const list=S.recharges||[];
+    const returns=S.returns||[];
     const pdvOpts='<option value="">— choisir le point de vente —</option>'+pdvs.map(p=>{
       const nm=p.nom_commercial||p.username; const loc=[p.ville,p.quartier].filter(Boolean).join(' · ');
       return '<option value="'+p.id+'">'+esc(nm)+(loc?' ('+esc(loc)+')':'')+'</option>';
@@ -778,13 +764,12 @@
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
         <div class="stat"><div class="lbl">Fonds total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
-        <div class="stat${Number(fund.en_circulation||0)>0?' red':''}"><div class="lbl">En circulation (à encaisser)</div><div class="num">${fmtFcfa(fund.en_circulation)}</div></div>
       </div>
-      ${renderCollections()}
       <div class="panel">
         <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
         <div style="padding:14px 20px;font-size:12px;line-height:2.1;color:var(--ink)">
           Total crédité par le superviseur&nbsp;: <b>${fmtFcfa(fund.total_credite)}</b> FCFA<br>
+          − Total retourné au superviseur&nbsp;: <b>${fmtFcfa(fund.total_retourne)}</b> FCFA<br>
           − Fonds actuel disponible (UV + FCFA encaissé)&nbsp;: <b>${fmtFcfa(fund.fonds_total)}</b> FCFA<br>
           <span style="color:var(--ink-soft)">= En circulation chez les PDV, pas encore payé&nbsp;: <b style="color:var(--ink)">${fmtFcfa(fund.en_circulation)}</b> FCFA</span>
         </div>
@@ -814,17 +799,30 @@
       <div class="panel">
         <div class="panel-head"><h3>Historique des recharges</h3><span class="hint">${list.length} recharge(s)</span></div>
         ${renderRechargeTable(list, true)}
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Retour de fonds au superviseur</h3><span class="hint">Ex : fin de journée, correction, restitution</span></div>
+        <form data-form-return style="padding:0">
+          <div class="form-grid">
+            <div class="field"><label>UV à retourner</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>
+            <div class="field"><label>FCFA à retourner</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
+          </div>
+          <div style="padding:0 20px 6px;color:var(--ink-soft);font-size:11px">Le montant retourné est retiré immédiatement de ton fonds. Ce n'est pas une recharge — c'est une restitution vers le superviseur.</div>
+          <div class="msg" data-msg></div>
+          <div class="form-actions"><button class="btn small" type="submit">Enregistrer le retour</button></div>
+        </form>
+        ${returns.length?renderReturnTable(returns):''}
       </div>`;
   }
 
   /* Icônes des boutons d'action (tableau Équipe) */
-  const ICON_VIEW='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9.5" ry="6"/><circle cx="12" cy="12" r="3"/></svg>';
-  const ICON_EDIT='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
-  const ICON_RESET='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2"/><path d="M15.5 7.5l3 3"/><path d="M18 5l3 3"/></svg>';
-  const ICON_BLOCK='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.9 4.9l14.2 14.2"/></svg>';
-  const ICON_UNBLOCK='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>';
-  const ICON_TRASH='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
-  const ICON_CREDIT='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/></svg>';
+  const ICON_VIEW='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_EDIT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+  const ICON_RESET='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2"/><path d="M15.5 7.5l3 3"/><path d="M18 5l3 3"/></svg>';
+  const ICON_BLOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.9 4.9l14.2 14.2"/></svg>';
+  const ICON_UNBLOCK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>';
+  const ICON_TRASH='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+  const ICON_CREDIT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/></svg>';
   function renderZones(){
     var zones=S.zones||[];
     var commerciaux=(S.users||[]).filter(function(u){return u.role==='COMMERCIAL';});
@@ -1130,6 +1128,17 @@
     }catch(err){ $('modal').querySelector('.modal-body').innerHTML='<div class="msg err" style="padding:10px 0">'+esc(err.message)+'</div>'; }
   }
 
+  async function openMasterReturns(id, dispName){
+    $('modal').innerHTML='<div class="modal-head"><h3>Retours de fonds — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
+      '<div class="modal-body"><div style="padding:10px 0;color:var(--ink-soft);font-size:11px">Chargement…</div></div>';
+    $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
+    $('overlay').classList.add('open');
+    try{
+      const list=await api('/users/'+id+'/returns');
+      $('modal').querySelector('.modal-body').innerHTML=renderReturnTable(list);
+    }catch(err){ $('modal').querySelector('.modal-body').innerHTML='<div class="msg err" style="padding:10px 0">'+esc(err.message)+'</div>'; }
+  }
+
     /* ---------- MODIFIER UN COMPTE ---------- */
   async function openEditUser(id){
     try{
@@ -1291,6 +1300,21 @@
       try{ await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST'}); await loadMasterData(); renderView(); }
       catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
     }));
+    const retf=document.querySelector('form[data-form-return]');
+    if(retf){ retf.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg=retf.querySelector('[data-msg]'); const d=Object.fromEntries(new FormData(retf).entries());
+      if((!d.uv||Number(d.uv)<=0) && (!d.fcfa||Number(d.fcfa)<=0)){ msg.textContent='✘ Indique un montant en UV et/ou en FCFA'; msg.className='msg err'; return; }
+      const ok=await dlgConfirm('Confirmer le retour ?','Ce montant sera retiré immédiatement de ton fonds et envoyé au superviseur.',{type:'warn',okText:'Confirmer le retour'});
+      if(!ok) return;
+      msg.textContent='Enregistrement…'; msg.className='msg';
+      const btn=retf.querySelector('button[type=submit]'); btn.disabled=true;
+      try{
+        await api('/master/returns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        await loadMasterData(); renderView();
+        dlgSuccess('Retour enregistré', 'Le montant a été retiré de ton fonds avec succès.');
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+    }); }
     // ---- Fonds Masters (Superviseur) : recherche + sélection, aucun chargement de liste complète ----
     if(S.view==='fonds'){
       wireFondsSearch();
@@ -1356,7 +1380,7 @@
     if(f){ f.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const id=f.dataset.master;
-      const msg=f.parentElement.querySelector('[data-msg]');
+      const msg=scope.querySelector('[data-msg-credit]');
       const d=Object.fromEntries(new FormData(f).entries());
       const btn=f.querySelector('button[type=submit]');
       if((!d.uv||Number(d.uv)<=0) && (!d.fcfa||Number(d.fcfa)<=0)){ msg.textContent='✘ Indique un montant en UV et/ou en FCFA'; msg.className='msg err'; return; }
@@ -1369,8 +1393,29 @@
         dlgSuccess('Fonds crédité', 'Le fonds a été mis à jour avec succès.');
       }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
     }); }
+    const rf=scope.querySelector('form[data-form-return-inline]');
+    if(rf){ rf.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const id=rf.dataset.master;
+      const msg=scope.querySelector('[data-msg-return]');
+      const d=Object.fromEntries(new FormData(rf).entries());
+      const btn=rf.querySelector('button[type=submit]');
+      if((!d.uv||Number(d.uv)<=0) && (!d.fcfa||Number(d.fcfa)<=0)){ msg.textContent='✘ Indique un montant en UV et/ou en FCFA'; msg.className='msg err'; return; }
+      const ok=await dlgConfirm('Confirmer le retrait ?','Ce montant sera retiré immédiatement du fonds de ce Master.',{type:'warn',okText:'Confirmer le retrait'});
+      if(!ok) return;
+      msg.textContent='Enregistrement…'; msg.className='msg'; btn.disabled=true;
+      try{
+        await api('/users/'+id+'/return',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        S.fondsStats=await api('/masters/stats');
+        const statRow=document.querySelector('.stat-row'); if(statRow) statRow.outerHTML=renderFondsStatsRow();
+        await selectMaster(id);
+        dlgSuccess('Retrait effectué', 'Le fonds a été mis à jour avec succès.');
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+    }); }
     const hb=scope.querySelector('[data-masterhistory]');
     if(hb) hb.addEventListener('click',()=>openMasterHistory(hb.dataset.masterhistory, hb.dataset.uname||''));
+    const rb=scope.querySelector('[data-masterreturns]');
+    if(rb) rb.addEventListener('click',()=>openMasterReturns(rb.dataset.masterreturns, rb.dataset.uname||''));
     const cb=scope.querySelector('[data-clearmaster]');
     if(cb) cb.addEventListener('click',()=>{
       S.fondsSelectedId=null; S.fondsSelectedDetail=null;
@@ -1417,6 +1462,12 @@
         S.masterFund=d.fund;
         dlgSuccess('Fonds crédité', 'Le superviseur a crédité ton fonds : +'+fmtUv(d.uv)+' UV, +'+fmtFcfa(d.fcfa)+' FCFA.');
         if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
+      } else if(d.type==='fund_returned'){
+        // Le superviseur vient de retirer du fonds du Master connecté (retour)
+        vibrate([60,40,60]);
+        S.masterFund=d.fund;
+        dlgError('Retrait effectué', 'Le superviseur a retiré de ton fonds : −'+fmtUv(d.uv)+' UV, −'+fmtFcfa(d.fcfa)+' FCFA.');
+        if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
       } else if(d.type==='recharge_alert'){
         // Recharge restée en attente depuis un jour précédent — alerte, elle reste "en attente"
         vibrate([100,60,100,60,100]);
@@ -1424,10 +1475,11 @@
         const who=rc.nom_commercial||rc.pdv_username||rc.master_username||'';
         dlgError('Recharge en attente', 'Une recharge de '+fmtUv(rc.montant_uv)+' UV ('+who+') n\'a toujours pas été payée. Elle reste en attente jusqu\'au règlement.');
         if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
-      } else if(d.type==='recharge_created' || d.type==='recharge_paid'){
+      } else if(d.type==='recharge_created' || d.type==='recharge_paid' || d.type==='fund_return_created'){
         // Suivi en direct côté superviseur (aucun rechargement de page nécessaire)
         if(S.auth && S.auth.user.role==='SUPERVISEUR'){
-          // rien à recalculer côté liste équipe sans requête ; on rafraîchit juste si un modal Master est ouvert
+          // rafraîchit la fiche du Master si elle est actuellement ouverte dans "Fonds Masters"
+          if(S.view==='fonds' && S.fondsSelectedId && Number(S.fondsSelectedId)===Number(d.masterId)) selectMaster(S.fondsSelectedId);
         }
       }
     };
@@ -1481,6 +1533,21 @@
           (showPayAction?('<td>'+(rc.statut==='EN_ATTENTE'?'<button class="btn small" data-payrecharge="'+rc.id+'">Marquer payé</button>':'—')+'</td>'):'')+
         '</tr>';
       }).join(''):'<tr class="empty-row"><td colspan="'+(showPayAction?6:5)+'">Aucune recharge enregistrée</td></tr>')+'</tbody>'+
+    '</table></div>';
+  }
+
+  function renderReturnTable(list){
+    list=list||[];
+    return '<div class="table-wrap"><table>'+
+      '<thead><tr><th>UV</th><th>FCFA</th><th>Initié par</th><th>Date</th></tr></thead>'+
+      '<tbody>'+(list.length?list.map(function(rt){
+        return '<tr>'+
+          '<td>'+fmtUv(rt.uv)+'</td>'+
+          '<td>'+fmtFcfa(rt.fcfa)+'</td>'+
+          '<td>'+(rt.initie_par_role==='SUPERVISEUR'?'<span class="pill" style="background:var(--red-soft);color:var(--red)">Superviseur</span>':'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Master</span>')+'</td>'+
+          '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(rt.created_at)+'</td>'+
+        '</tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="4">Aucun retour enregistré</td></tr>')+'</tbody>'+
     '</table></div>';
   }
 
