@@ -130,6 +130,17 @@ async function migrate() {
     fcfa NUMERIC NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now()
   )`);
+  // Historique des retours de fonds (Master -> Superviseur). Diminue le fonds du Master.
+  // initie_par_role = 'MASTER' (le Master rend lui-même) ou 'SUPERVISEUR' (le superviseur retire).
+  await pool.query(`CREATE TABLE IF NOT EXISTS fund_returns (
+    id SERIAL PRIMARY KEY,
+    master_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    uv NUMERIC NOT NULL DEFAULT 0,
+    fcfa NUMERIC NOT NULL DEFAULT 0,
+    initie_par INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    initie_par_role TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`);
   // Chaque recharge/vente d'UV qu'un Master fait à un PDV. "EN_ATTENTE" tant que le PDV n'a pas payé.
   await pool.query(`CREATE TABLE IF NOT EXISTS uv_recharges (
     id SERIAL PRIMARY KEY,
@@ -355,14 +366,12 @@ const numOrNaN = (v) => { const n = Number(v); return isFinite(n) ? n : NaN; };
 app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
   const r = await pool.query(`
     SELECT u.solde_uv, u.solde_fcfa,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite,
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne
     FROM users u WHERE u.id=$1`, [req.user.id]);
-  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite: 0 };
-  row.solde_uv = Number(row.solde_uv || 0);
-  row.solde_fcfa = Number(row.solde_fcfa || 0);
-  row.total_credite = Number(row.total_credite || 0);
-  row.fonds_total = row.solde_uv + row.solde_fcfa;
-  row.en_circulation = row.total_credite - row.fonds_total; // argent chez des PDV, pas encore payé
+  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite: 0, total_retourne: 0 };
+  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
+  row.en_circulation = Number(row.total_credite) - Number(row.total_retourne) - row.fonds_total; // argent chez des PDV, pas encore payé
   res.json(row);
 }));
 
@@ -428,6 +437,29 @@ app.post('/master/recharges/:id/pay', requireRole('MASTER'), wrap(async (req, re
   res.json({ ok: true, fund: fund.rows[0] });
 }));
 
+// Historique des retours de fonds initiés par le Master lui-même
+app.get('/master/returns', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query('SELECT * FROM fund_returns WHERE master_id=$1 ORDER BY created_at DESC LIMIT 200', [req.user.id]);
+  res.json(r.rows);
+}));
+
+// Le Master rend lui-même de l'UV et/ou du FCFA au superviseur (retour de fonds)
+app.post('/master/returns', requireRole('MASTER'), wrap(async (req, res) => {
+  const uv = numOrNaN(req.body.uv) || 0;
+  const fcfa = numOrNaN(req.body.fcfa) || 0;
+  if (!(uv > 0) && !(fcfa > 0)) return res.status(400).json({ error: 'Indique un montant en UV et/ou en FCFA à retourner' });
+  const m = await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [req.user.id]);
+  const solde = m.rows[0] || { solde_uv: 0, solde_fcfa: 0 };
+  if (uv > Number(solde.solde_uv)) return res.status(400).json({ error: 'Tu ne peux pas retourner plus d\'UV que ton solde disponible (' + solde.solde_uv + ')' });
+  if (fcfa > Number(solde.solde_fcfa)) return res.status(400).json({ error: 'Tu ne peux pas retourner plus de FCFA que ton solde encaissé (' + solde.solde_fcfa + ')' });
+  const fund = await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa-$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
+    [uv, fcfa, req.user.id]);
+  const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role) VALUES ($1,$2,$3,$1,$4) RETURNING *',
+    [req.user.id, uv, fcfa, 'MASTER']);
+  broadcastToSupervisors({ type: 'fund_return_created', masterId: req.user.id, ret: ret.rows[0] });
+  res.json({ ok: true, fund: fund.rows[0], ret: ret.rows[0] });
+}));
+
 /* ---- Supervision des fonds Master (SUPERVISEUR uniquement) ---- */
 
 // Le superviseur crédite manuellement le fonds (UV et/ou FCFA) d'un Master
@@ -445,12 +477,36 @@ app.post('/users/:id/credit', requireRole('SUPERVISEUR'), wrap(async (req, res) 
   res.json({ ok: true, fund: r.rows[0] });
 }));
 
+// Le superviseur retire lui-même de l'UV et/ou du FCFA du fonds d'un Master (retour de fonds)
+app.post('/users/:id/return', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const uv = numOrNaN(req.body.uv) || 0;
+  const fcfa = numOrNaN(req.body.fcfa) || 0;
+  if (!(uv > 0) && !(fcfa > 0)) return res.status(400).json({ error: 'Indique un montant en UV et/ou en FCFA à retirer' });
+  const t = await pool.query('SELECT role, solde_uv, solde_fcfa FROM users WHERE id=$1', [req.params.id]);
+  if (!t.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
+  if (t.rows[0].role !== 'MASTER') return res.status(400).json({ error: 'Seul un compte Master peut faire l\'objet d\'un retour de fonds' });
+  if (uv > Number(t.rows[0].solde_uv)) return res.status(400).json({ error: 'Ce Master n\'a que ' + t.rows[0].solde_uv + ' UV disponible' });
+  if (fcfa > Number(t.rows[0].solde_fcfa)) return res.status(400).json({ error: 'Ce Master n\'a que ' + t.rows[0].solde_fcfa + ' FCFA encaissé' });
+  const r = await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa-$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
+    [uv, fcfa, req.params.id]);
+  const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+    [req.params.id, uv, fcfa, req.user.id, 'SUPERVISEUR']);
+  sendToUser(req.params.id, { type: 'fund_returned', fund: r.rows[0], uv, fcfa });
+  res.json({ ok: true, fund: r.rows[0], ret: ret.rows[0] });
+}));
+
 // Le superviseur consulte l'historique des recharges d'un Master donné
 app.get('/users/:id/recharges', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const r = await pool.query(
     `SELECT rc.*, u.nom_commercial, u.username AS pdv_username
      FROM uv_recharges rc JOIN users u ON u.id = rc.pdv_id
      WHERE rc.master_id=$1 ORDER BY rc.created_at DESC LIMIT 300`, [req.params.id]);
+  res.json(r.rows);
+}));
+
+// Le superviseur consulte l'historique des retours de fonds d'un Master donné
+app.get('/users/:id/returns', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query('SELECT * FROM fund_returns WHERE master_id=$1 ORDER BY created_at DESC LIMIT 200', [req.params.id]);
   res.json(r.rows);
 }));
 
@@ -465,15 +521,7 @@ app.get('/masters/stats', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
       (SELECT COUNT(*) FROM uv_recharges rc JOIN users m ON m.id=rc.master_id WHERE m.role='MASTER' AND rc.statut='EN_ATTENTE') AS total_en_attente,
       (SELECT COUNT(*) FROM uv_recharges rc JOIN users m ON m.id=rc.master_id WHERE m.role='MASTER' AND rc.statut='EN_ATTENTE' AND rc.created_at < date_trunc('day', now())) AS total_en_retard
     FROM users u WHERE u.role='MASTER'`);
-  const st = r.rows[0] || {};
-  res.json({
-    count: Number(st.count || 0),
-    total_uv: Number(st.total_uv || 0),
-    total_fcfa: Number(st.total_fcfa || 0),
-    total_fonds: Number(st.total_uv || 0) + Number(st.total_fcfa || 0),
-    total_en_attente: Number(st.total_en_attente || 0),
-    total_en_retard: Number(st.total_en_retard || 0)
-  });
+  res.json(r.rows[0]);
 }));
 
 // Recherche de Masters par nom/prénom/identifiant — pagination légère (20 résultats max), jamais de liste complète
@@ -501,16 +549,16 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
       COUNT(rc.id) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.created_at < date_trunc('day', now())) AS en_retard,
       COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.created_at >= date_trunc('day', now())), 0) AS uv_du_jour,
       MAX(rc.created_at) AS derniere_recharge,
-      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite,
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne
     FROM users u
     LEFT JOIN uv_recharges rc ON rc.master_id = u.id
     WHERE u.id=$1 AND u.role='MASTER'
     GROUP BY u.id`, [req.params.id]);
   if (!r.rows.length) return res.status(404).json({ error: 'Master introuvable' });
   const row = r.rows[0];
-  ['solde_uv', 'solde_fcfa', 'total_credite', 'en_attente', 'en_retard', 'uv_du_jour'].forEach(k => { row[k] = Number(row[k] || 0); });
-  row.fonds_total = row.solde_uv + row.solde_fcfa;
-  row.en_circulation = row.total_credite - row.fonds_total;
+  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
+  row.en_circulation = Number(row.total_credite) - Number(row.total_retourne) - row.fonds_total;
   res.json(row);
 }));
 
