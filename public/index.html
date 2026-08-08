@@ -767,10 +767,11 @@
     return header+search+detail+allCredits;
   }
   function renderRecharges(){
-    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,total_retourne:0,fonds_total:0,en_circulation:0};
+    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,total_retourne:0,fonds_total:0,en_circulation:0,manquant:0};
     const pdvs=S.pdvs||[];
     const list=S.recharges||[];
     const returns=S.returns||[];
+    const hasManquant=Number(fund.manquant||0)>0;
     const pdvOpts='<option value="">— choisir le point de vente —</option>'+pdvs.map(p=>{
       const nm=p.nom_commercial||p.username; const loc=[p.ville,p.quartier].filter(Boolean).join(' · ');
       return '<option value="'+p.id+'">'+esc(nm)+(loc?' ('+esc(loc)+')':'')+'</option>';
@@ -779,7 +780,11 @@
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
         <div class="stat"><div class="lbl">Fonds total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
+        <div class="stat"><div class="lbl">Total crédité depuis le début</div><div class="num">${fmtFcfa(fund.total_credite)}</div></div>
       </div>
+      ${hasManquant?`<div class="panel" style="background:var(--red-soft);border:1px solid var(--red)">
+        <div style="padding:14px 20px;color:var(--red);font-size:12px;font-weight:700">⚠ Manquant détecté&nbsp;: ${fmtFcfa(fund.manquant)} FCFA ne sont ni dans ton fonds actuel, ni dans une recharge en attente. Vérifie avec le superviseur.</div>
+      </div>`:''}
       <div class="panel">
         <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
         <div style="padding:14px 20px;font-size:12px;line-height:2.1;color:var(--ink)">
