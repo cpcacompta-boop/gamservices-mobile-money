@@ -664,7 +664,7 @@
       cards=`<div class="stat-row">
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
-        <div class="stat"><div class="lbl">Fonds de commerce total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
+        <div class="stat"><div class="lbl">Fonds total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
         <div class="stat${enRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${enAttente}${enRetard?' <span style="font-size:11px;color:var(--red)">('+enRetard+' en retard)</span>':''}</div></div>
       </div>
       <div class="panel"><div class="panel-head"><h3>Dernières recharges</h3><span class="hint">Historique complet dans « Recharges UV »</span></div>
@@ -699,7 +699,7 @@
           <div><div class="lbl">Fonds FCFA</div><div class="num">${fmtFcfa(m.solde_fcfa)}</div></div>
         </div>
         <div style="padding:12px 20px;border-bottom:1px solid var(--line);font-size:11px;line-height:1.9;color:var(--ink-soft)">
-          Fonds de commerce total (UV + FCFA)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.fonds_total)}</b> FCFA<br>
+          Fonds total (UV + FCFA)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.fonds_total)}</b> FCFA<br>
           Total crédité depuis le début&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_credite)}</b> FCFA<br>
           En circulation chez les PDV (pas encore payé)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.en_circulation)}</b> FCFA
         </div>
@@ -751,7 +751,7 @@
     return `<div class="stat-row">
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
-        <div class="stat"><div class="lbl">Fonds de commerce total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
+        <div class="stat"><div class="lbl">Fonds total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
       </div>
       <div class="panel">
         <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
