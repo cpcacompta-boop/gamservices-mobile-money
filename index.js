@@ -373,17 +373,15 @@ function computeFundBreakdown(row) {
   row.total_credite = Number(row.total_credite_uv) + Number(row.total_credite_fcfa);
   row.total_retourne = Number(row.total_retourne_uv) + Number(row.total_retourne_fcfa);
 
-  // Fonds UV : ce qui a été crédité en UV, moins ce qui a été retourné en UV, moins ce qu'il reste en stock UV
-  row.en_circulation_uv = Number(row.total_credite_uv) - Number(row.total_retourne_uv) - Number(row.solde_uv);
-  row.manquant_uv = Math.max(0, row.en_circulation_uv - Number(row.en_attente_uv));
-
-  // Fonds FCFA : idem, mais côté cash direct (recharges type_fonds='FCFA' encore en attente de remboursement)
-  row.en_circulation_fcfa = Number(row.total_credite_fcfa) - Number(row.total_retourne_fcfa) - Number(row.solde_fcfa);
-  row.manquant_fcfa = Math.max(0, row.en_circulation_fcfa - Number(row.en_attente_fcfa));
-
-  // Total global (rétro-compatibilité avec l'affichage existant)
-  row.en_circulation = row.en_circulation_uv + row.en_circulation_fcfa;
-  row.manquant = row.manquant_uv + row.manquant_fcfa;
+  // Comparaison UNIQUE et globale : Fonds UV + Fonds FCFA = Total crédité − Total retourné.
+  // On ne sépare PAS le manquant par fonds (UV vs FCFA) : dès qu'un PDV paie une recharge UV,
+  // cet UV se transforme en FCFA dans le fonds du Master (ce n'est pas une perte, juste un
+  // changement de forme). Séparer le calcul par fonds ferait donc apparaître un faux manquant
+  // à chaque paiement. Seule la somme globale doit être comparée.
+  // en_attente_reel : valeur (en UV comme en FCFA, 1 UV = 1 FCFA) encore chez les PDV, non réglée —
+  // montant_fcfa porte toujours ce montant, que la recharge soit de type UV ou FCFA.
+  row.en_circulation = row.total_credite - row.total_retourne - row.fonds_total;
+  row.manquant = Math.max(0, row.en_circulation - Number(row.en_attente_reel || 0));
   return row;
 }
 
@@ -395,10 +393,9 @@ app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
       COALESCE((SELECT SUM(fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_fcfa,
       COALESCE((SELECT SUM(uv) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_uv,
       COALESCE((SELECT SUM(fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_fcfa,
-      COALESCE((SELECT SUM(montant_uv) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE' AND type_fonds='UV'), 0) AS en_attente_uv,
-      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE' AND type_fonds='FCFA'), 0) AS en_attente_fcfa
+      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE'), 0) AS en_attente_reel
     FROM users u WHERE u.id=$1`, [req.user.id]);
-  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite_uv: 0, total_credite_fcfa: 0, total_retourne_uv: 0, total_retourne_fcfa: 0, en_attente_uv: 0, en_attente_fcfa: 0 };
+  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite_uv: 0, total_credite_fcfa: 0, total_retourne_uv: 0, total_retourne_fcfa: 0, en_attente_reel: 0 };
   res.json(computeFundBreakdown(row));
 }));
 
@@ -614,8 +611,7 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
       COALESCE((SELECT SUM(fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_fcfa,
       COALESCE((SELECT SUM(uv) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_uv,
       COALESCE((SELECT SUM(fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_fcfa,
-      COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.type_fonds='UV'), 0) AS en_attente_uv,
-      COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.type_fonds='FCFA'), 0) AS en_attente_fcfa
+      COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'), 0) AS en_attente_reel
     FROM users u
     LEFT JOIN uv_recharges rc ON rc.master_id = u.id
     WHERE u.id=$1 AND u.role='MASTER'
