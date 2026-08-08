@@ -657,13 +657,14 @@
         </div>
       </div>`;
     } else if(u.role==='MASTER'){
-      const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
+      const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,fonds_total:0};
       const recent=(S.recharges||[]).slice(0,5);
       const enAttente=(S.recharges||[]).filter(r=>r.statut==='EN_ATTENTE').length;
       const enRetard=(S.recharges||[]).filter(isOverdue).length;
       cards=`<div class="stat-row">
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
+        <div class="stat"><div class="lbl">Fonds de commerce total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
         <div class="stat${enRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${enAttente}${enRetard?' <span style="font-size:11px;color:var(--red)">('+enRetard+' en retard)</span>':''}</div></div>
       </div>
       <div class="panel"><div class="panel-head"><h3>Dernières recharges</h3><span class="hint">Historique complet dans « Recharges UV »</span></div>
@@ -696,6 +697,11 @@
         <div class="fonds-card-nums">
           <div><div class="lbl">Fonds UV</div><div class="num uv">${fmtUv(m.solde_uv)}</div></div>
           <div><div class="lbl">Fonds FCFA</div><div class="num">${fmtFcfa(m.solde_fcfa)}</div></div>
+        </div>
+        <div style="padding:12px 20px;border-bottom:1px solid var(--line);font-size:11px;line-height:1.9;color:var(--ink-soft)">
+          Fonds de commerce total (UV + FCFA)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.fonds_total)}</b> FCFA<br>
+          Total crédité depuis le début&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_credite)}</b> FCFA<br>
+          En circulation chez les PDV (pas encore payé)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.en_circulation)}</b> FCFA
         </div>
         <div class="fonds-card-body">
           <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px">
@@ -735,7 +741,7 @@
     return header+search+detail;
   }
   function renderRecharges(){
-    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
+    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,fonds_total:0,en_circulation:0};
     const pdvs=S.pdvs||[];
     const list=S.recharges||[];
     const pdvOpts='<option value="">— choisir le point de vente —</option>'+pdvs.map(p=>{
@@ -745,6 +751,15 @@
     return `<div class="stat-row">
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
+        <div class="stat"><div class="lbl">Fonds de commerce total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
+        <div style="padding:14px 20px;font-size:12px;line-height:2.1;color:var(--ink)">
+          Total crédité par le superviseur&nbsp;: <b>${fmtFcfa(fund.total_credite)}</b> FCFA<br>
+          − Fonds actuel disponible (UV + FCFA encaissé)&nbsp;: <b>${fmtFcfa(fund.fonds_total)}</b> FCFA<br>
+          <span style="color:var(--ink-soft)">= En circulation chez les PDV, pas encore payé&nbsp;: <b style="color:var(--ink)">${fmtFcfa(fund.en_circulation)}</b> FCFA</span>
+        </div>
       </div>
       <div class="panel" style="background:var(--warn-soft);border:1px dashed var(--warn)">
         <div style="padding:12px 20px;color:var(--warn);font-size:11px;line-height:1.6">
@@ -756,8 +771,8 @@
         <form data-form-recharge>
           <div class="form-grid">
             <div class="field span2"><label>Point de vente (PDV)</label><select name="pdv_id" required>${pdvOpts}</select></div>
-            <div class="field"><label>Montant en UV</label><input name="montant_uv" type="number" min="0.01" step="any" required placeholder="ex : 50000"></div>
-            <div class="field"><label>Montant en FCFA correspondant</label><input name="montant_fcfa" type="number" min="0" step="any" placeholder="ex : 50000"></div>
+            <div class="field"><label>Montant en UV</label><input name="montant_uv" data-rc-uv type="number" min="0.01" step="any" required placeholder="ex : 50000"></div>
+            <div class="field"><label>Montant en FCFA dû (1 UV = 1 FCFA)</label><input name="montant_fcfa" data-rc-fcfa type="number" readonly tabindex="-1" style="background:var(--surface-2);color:var(--ink-soft)" placeholder="calculé automatiquement"></div>
             <div class="field span2" style="flex-direction:row;align-items:center;gap:8px;display:flex">
               <input type="checkbox" name="paid_now" id="paid_now" style="width:auto">
               <label for="paid_now" style="margin:0">Le PDV a déjà payé (encaissement immédiat)</label>
@@ -1016,7 +1031,8 @@
         if(u.role==='COMMERCIAL'){ zoneRow = '<dt>Zone</dt><dd>'+(u.zone_info?(esc(u.zone_info.nom)+' <span class="pill" style="background:var(--pos-soft);color:var(--pos)">'+(u.zone_info.est_chef?'chef de zone':'suppléant')+'</span>'+(u.zone_info.quartiers?'<div style="color:var(--ink-soft);font-size:11px;margin-top:3px">Quartiers : '+esc(u.zone_info.quartiers)+'</div>':'')):'<span style="color:var(--ink-faint)">non affecté</span>')+'</dd>'; }
         var fundRow='';
         if(u.role==='MASTER'){ fundRow = '<dt>Fonds UV</dt><dd><b>'+esc(u.solde_uv||0)+'</b> UV</dd>'+
-          '<dt>Fonds FCFA</dt><dd><b>'+fmtFcfa(u.solde_fcfa)+'</b> FCFA</dd>'; }
+          '<dt>Fonds FCFA</dt><dd><b>'+fmtFcfa(u.solde_fcfa)+'</b> FCFA</dd>'+
+          '<dt>Fonds total</dt><dd><b>'+fmtFcfa(Number(u.solde_uv||0)+Number(u.solde_fcfa||0))+'</b> FCFA</dd>'; }
         rows = '<dt>Nom</dt><dd>'+esc(u.nom||'—')+'</dd>'+
           '<dt>Prénoms</dt><dd>'+esc(u.prenoms||'—')+'</dd>'+
           '<dt>Contact</dt><dd>'+esc(u.contact||'—')+'</dd>'+
@@ -1226,7 +1242,10 @@
     }));
     // ---- Recharges UV (Master) ----
     const rf=document.querySelector('form[data-form-recharge]');
-    if(rf){ rf.addEventListener('submit', async (e)=>{
+    if(rf){
+      const uvIn=rf.querySelector('[data-rc-uv]'), fcfaIn=rf.querySelector('[data-rc-fcfa]');
+      if(uvIn && fcfaIn){ uvIn.addEventListener('input', ()=>{ fcfaIn.value=uvIn.value; }); }
+      rf.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const msg=rf.querySelector('[data-msg]'); msg.textContent='Enregistrement…'; msg.className='msg';
       const fd=new FormData(rf); const d=Object.fromEntries(fd.entries()); d.paid_now = fd.get('paid_now')==='on';
@@ -1236,7 +1255,8 @@
         msg.textContent='✔ Recharge enregistrée'; msg.className='msg ok';
         await loadMasterData(); renderView();
       }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; submitBtn.disabled=false; }
-    }); }
+      });
+    }
     document.querySelectorAll('[data-payrecharge]').forEach(b=>b.addEventListener('click', async ()=>{
       const ok=await dlgConfirm('Marquer cette recharge comme payée ?','Le montant en FCFA sera ajouté à ton fonds encaissé.',{type:'success',okText:'Confirmer le paiement'});
       if(!ok) return; b.disabled=true; b.textContent='…';
