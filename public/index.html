@@ -658,7 +658,7 @@
         </div>
       </div>`;
     } else if(u.role==='MASTER'){
-      const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,fonds_total:0};
+      const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,fonds_total:0,total_credite:0,total_retourne:0,en_circulation:0};
       const recent=(S.recharges||[]).slice(0,5);
       const enAttente=(S.recharges||[]).filter(r=>r.statut==='EN_ATTENTE').length;
       const enRetard=(S.recharges||[]).filter(isOverdue).length;
@@ -667,6 +667,15 @@
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
         <div class="stat"><div class="lbl">Fonds total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
         <div class="stat${enRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${enAttente}${enRetard?' <span style="font-size:11px;color:var(--red)">('+enRetard+' en retard)</span>':''}</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
+        <div style="padding:14px 20px;font-size:12px;line-height:2.1;color:var(--ink)">
+          Total crédité par le superviseur&nbsp;: <b>${fmtFcfa(fund.total_credite)}</b> FCFA<br>
+          − Total retourné au superviseur&nbsp;: <b>${fmtFcfa(fund.total_retourne)}</b> FCFA<br>
+          − Fonds actuel disponible (UV + FCFA encaissé)&nbsp;: <b>${fmtFcfa(fund.fonds_total)}</b> FCFA<br>
+          <span style="color:var(--ink-soft)">= En circulation chez les PDV, pas encore payé&nbsp;: <b style="color:var(--ink)">${fmtFcfa(fund.en_circulation)}</b> FCFA</span>
+        </div>
       </div>
       <div class="panel"><div class="panel-head"><h3>Dernières recharges</h3><span class="hint">Historique complet dans « Recharges UV »</span></div>
         ${renderRechargeTable(recent, false)}
