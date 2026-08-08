@@ -495,6 +495,12 @@ app.post('/users/:id/return', requireRole('SUPERVISEUR'), wrap(async (req, res) 
   res.json({ ok: true, fund: r.rows[0], ret: ret.rows[0] });
 }));
 
+// Le superviseur consulte l'historique des versements (crédits UV/FCFA) accordés à un Master donné
+app.get('/users/:id/credits', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query('SELECT * FROM fund_credits WHERE master_id=$1 ORDER BY created_at DESC LIMIT 300', [req.params.id]);
+  res.json(r.rows);
+}));
+
 // Le superviseur consulte l'historique des recharges d'un Master donné
 app.get('/users/:id/recharges', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const r = await pool.query(
