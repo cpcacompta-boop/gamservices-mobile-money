@@ -351,10 +351,16 @@ app.delete('/zones/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
    ===================================================================== */
 const numOrNaN = (v) => { const n = Number(v); return isFinite(n) ? n : NaN; };
 
-// Le Master consulte son propre fonds (solde UV disponible, solde FCFA encaissé)
+// Le Master consulte son propre fonds (solde UV disponible, solde FCFA encaissé, fonds de commerce total)
 app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
-  const r = await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [req.user.id]);
-  res.json(r.rows[0] || { solde_uv: 0, solde_fcfa: 0 });
+  const r = await pool.query(`
+    SELECT u.solde_uv, u.solde_fcfa,
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite
+    FROM users u WHERE u.id=$1`, [req.user.id]);
+  const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite: 0 };
+  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
+  row.en_circulation = Number(row.total_credite) - row.fonds_total; // argent chez des PDV, pas encore payé
+  res.json(row);
 }));
 
 // Liste des PDV disponibles pour une recharge (aucune restriction de zone/quartier)
@@ -375,13 +381,16 @@ app.get('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
 }));
 
 // Le Master enregistre une vente/recharge d'UV à un PDV (suite à son appel téléphonique)
+// RÈGLE MÉTIER FERME : 1 UV vendu = 1 FCFA dû par le PDV. Le montant FCFA n'est jamais
+// saisi séparément : il est TOUJOURS égal au montant en UV, pour que le fonds de commerce
+// (UV restant + FCFA encaissé) corresponde exactement, à tout moment, au total crédité par
+// le superviseur — sans quoi le Master ne pourrait jamais détecter un manquant.
 app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const pdvId = Number(req.body.pdv_id);
   const uv = numOrNaN(req.body.montant_uv);
-  const fcfa = req.body.montant_fcfa != null && req.body.montant_fcfa !== '' ? numOrNaN(req.body.montant_fcfa) : 0;
+  const fcfa = uv; // toujours 1:1 avec l'UV — jamais une valeur indépendante
   const paidNow = !!req.body.paid_now;
   if (!pdvId || !(uv > 0)) return res.status(400).json({ error: 'Le point de vente et le montant en UV sont obligatoires' });
-  if (!(fcfa >= 0)) return res.status(400).json({ error: 'Montant en FCFA invalide' });
 
   const pdv = await pool.query("SELECT id FROM users WHERE id=$1 AND role='PDV' AND actif=TRUE", [pdvId]);
   if (!pdv.rows.length) return res.status(404).json({ error: 'Point de vente introuvable' });
@@ -480,13 +489,17 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
       COUNT(rc.id) FILTER (WHERE rc.statut='EN_ATTENTE') AS en_attente,
       COUNT(rc.id) FILTER (WHERE rc.statut='EN_ATTENTE' AND rc.created_at < date_trunc('day', now())) AS en_retard,
       COALESCE(SUM(rc.montant_uv) FILTER (WHERE rc.created_at >= date_trunc('day', now())), 0) AS uv_du_jour,
-      MAX(rc.created_at) AS derniere_recharge
+      MAX(rc.created_at) AS derniere_recharge,
+      COALESCE((SELECT SUM(uv+fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite
     FROM users u
     LEFT JOIN uv_recharges rc ON rc.master_id = u.id
     WHERE u.id=$1 AND u.role='MASTER'
     GROUP BY u.id`, [req.params.id]);
   if (!r.rows.length) return res.status(404).json({ error: 'Master introuvable' });
-  res.json(r.rows[0]);
+  const row = r.rows[0];
+  row.fonds_total = Number(row.solde_uv) + Number(row.solde_fcfa);
+  row.en_circulation = Number(row.total_credite) - row.fonds_total;
+  res.json(row);
 }));
 
 app.get('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
