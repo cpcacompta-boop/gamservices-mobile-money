@@ -1606,7 +1606,7 @@
         return '<tr>'+
           '<td>'+esc(pdv)+'</td>'+
           '<td>'+typeBadge(rc)+'</td>'+
-          '<td>'+(rc.type_fonds==='FCFA'?'—':fmtUv(rc.montant_uv))+'</td>'+
+          '<td>'+(rc.type_fonds==='FCFA'?fmtUv(rc.montant_fcfa):fmtUv(rc.montant_uv))+'</td>'+
           '<td>'+(rc.type_fonds==='FCFA'?fmtFcfa(rc.montant_fcfa):(rc.statut==='PAYE'?fmtFcfa(rc.montant_fcfa):'—'))+'</td>'+
           '<td>'+statutBadge(rc)+'</td>'+
           '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(rc.created_at)+'</td>'+
