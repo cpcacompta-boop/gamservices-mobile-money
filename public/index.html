@@ -659,16 +659,21 @@
         </div>
       </div>`;
     } else if(u.role==='MASTER'){
-      const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,fonds_total:0,total_credite:0,total_retourne:0,en_circulation:0};
+      const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,fonds_total:0,total_credite:0,total_retourne:0,en_circulation:0,manquant:0};
       const recent=(S.recharges||[]).slice(0,5);
       const enAttente=(S.recharges||[]).filter(r=>r.statut==='EN_ATTENTE').length;
       const enRetard=(S.recharges||[]).filter(isOverdue).length;
+      const hasManquant=Number(fund.manquant||0)>0;
       cards=`<div class="stat-row">
         <div class="stat gold"><div class="lbl">Fonds UV disponible</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
         <div class="stat"><div class="lbl">Fonds FCFA encaissé</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
         <div class="stat"><div class="lbl">Fonds total</div><div class="num">${fmtFcfa(fund.fonds_total)}</div></div>
+        <div class="stat"><div class="lbl">Total crédité depuis le début</div><div class="num">${fmtFcfa(fund.total_credite)}</div></div>
         <div class="stat${enRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${enAttente}${enRetard?' <span style="font-size:11px;color:var(--red)">('+enRetard+' en retard)</span>':''}</div></div>
       </div>
+      ${hasManquant?`<div class="panel" style="background:var(--red-soft);border:1px solid var(--red)">
+        <div style="padding:14px 20px;color:var(--red);font-size:12px;font-weight:700">⚠ Manquant détecté&nbsp;: ${fmtFcfa(fund.manquant)} FCFA ne sont ni dans ton fonds actuel, ni dans une recharge en attente. Vérifie avec le superviseur.</div>
+      </div>`:''}
       <div class="panel">
         <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
         <div style="padding:14px 20px;font-size:12px;line-height:2.1;color:var(--ink)">
@@ -714,6 +719,7 @@
           Total crédité depuis le début&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_credite)}</b> FCFA<br>
           Total retourné au superviseur&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.total_retourne)}</b> FCFA<br>
           En circulation chez les PDV (pas encore payé)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.en_circulation)}</b> FCFA
+          ${Number(m.manquant||0)>0?'<br><span style="color:var(--red);font-weight:700">⚠ Manquant détecté : '+fmtFcfa(m.manquant)+' FCFA</span>':''}
         </div>
         <div class="fonds-card-body">
           <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px">
@@ -733,12 +739,6 @@
             <button class="btn small" type="submit" style="background:var(--red)">Retirer</button>
           </form>
           <div class="msg" data-msg-return></div>
-        </div>
-        <div class="fonds-card-foot">
-          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-mastercredits="${m.id}" data-uname="${esc(nom)}">Historique des versements</button>
-          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="${m.id}" data-uname="${esc(nom)}">Historique des recharges</button>
-          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterreturns="${m.id}" data-uname="${esc(nom)}">Historique des retours</button>
-          <button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--ink-soft);border:1px solid var(--line)" data-clearmaster="1">✕ Changer de Master</button>
         </div>
       </div>`;
   }
