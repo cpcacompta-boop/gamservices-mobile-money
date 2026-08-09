@@ -162,6 +162,9 @@ async function migrate() {
   // Mode de règlement choisi au paiement : 'FCFA' (le PDV paie en cash) ou 'UV' (le PDV rend de l'UV = retour).
   // Reste NULL tant que la recharge n'est pas payée.
   await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS mode_paiement TEXT`);
+  // Traçabilité du règlement : qui a encaissé (le Master lui-même, ou un Commercial de la zone) ?
+  await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par_role TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS uv_recharges_master ON uv_recharges(master_id, created_at DESC)`);
   await seedSuperviseur();
   console.log('\u2714 Migration terminee : base a jour.');
@@ -455,10 +458,12 @@ app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const montantFcfaCol = montant;
 
   const statut = paidNow ? 'PAYE' : 'EN_ATTENTE';
+  const reglePar = paidNow ? req.user.id : null;
+  const reglementRole = paidNow ? 'MASTER' : null;
   const r = await pool.query(
-    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, type_fonds, mode_paiement, paid_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
-    [req.user.id, pdvId, montantUvCol, montantFcfaCol, statut, typeFonds, modePaiement]);
+    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, type_fonds, mode_paiement, regle_par, regle_par_role, paid_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
+    [req.user.id, pdvId, montantUvCol, montantFcfaCol, statut, typeFonds, modePaiement, reglePar, reglementRole]);
 
   // ---- Mise à jour du fonds : modèle unifié (débit selon le type, crédit selon le mode) ----
   // DÉBIT (ce que le Master donne au PDV), toujours au moment de la recharge :
@@ -490,8 +495,8 @@ app.post('/master/recharges/:id/pay', requireRole('MASTER'), wrap(async (req, re
   // 1 UV = 1 FCFA : montant_fcfa porte toujours le montant dû.
   const modePaiement = req.body.mode_paiement === 'UV' ? 'UV' : 'FCFA';
   const montant = Number(rc.rows[0].montant_fcfa);
-  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement=$1, paid_at=now() WHERE id=$2",
-    [modePaiement, req.params.id]);
+  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement=$1, regle_par=$2, regle_par_role='MASTER', paid_at=now() WHERE id=$3",
+    [modePaiement, req.user.id, req.params.id]);
   const fund = modePaiement === 'UV'
     ? await pool.query('UPDATE users SET solde_uv=solde_uv+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id])
     : await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
@@ -599,13 +604,43 @@ app.post('/commercial/recharges/:id/collect', requireRole('COMMERCIAL'), wrap(as
   if (!pdvIds.includes(Number(rc.pdv_id))) return res.status(403).json({ error: "Ce point de vente n'est pas dans ta zone" });
 
   const montant = Number(rc.montant_fcfa);
-  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement='FCFA', paid_at=now() WHERE id=$1", [rc.id]);
+  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement='FCFA', regle_par=$1, regle_par_role='COMMERCIAL', paid_at=now() WHERE id=$2", [req.user.id, rc.id]);
   const fund = await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, rc.master_id]);
 
   const commercialNom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
   sendToUser(rc.master_id, { type: 'recharge_collected', fund: fund.rows[0], montant, commercial: commercialNom });
   broadcastToSupervisors({ type: 'recharge_paid', masterId: rc.master_id, id: rc.id, mode_paiement: 'FCFA', par: 'COMMERCIAL' });
   res.json({ ok: true, fund: fund.rows[0] });
+}));
+
+// Historique des encaissements de la zone (pour le point du commercial) : qui a réglé (Master ou Commercial), combien, quand
+app.get('/commercial/history', requireRole('COMMERCIAL'), wrap(async (req, res) => {
+  const zone = await getCommercialZone(req.user.id);
+  const empty = { zone: null, items: [], stats: { total: 0, total_commercial: 0, total_master: 0, total_jour: 0 } };
+  if (!zone) return res.json(empty);
+  const pdvIds = await getZonePdvIds(zone);
+  if (!pdvIds.length) return res.json(Object.assign({}, empty, { zone: { id: zone.id, nom: zone.nom } }));
+
+  const items = await pool.query(
+    `SELECT rc.id, rc.montant_fcfa, rc.mode_paiement, rc.paid_at, rc.regle_par_role,
+            p.nom_commercial, p.username AS pdv_username,
+            m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username,
+            g.nom AS regle_nom, g.prenoms AS regle_prenoms, g.username AS regle_username
+     FROM uv_recharges rc
+     JOIN users p ON p.id = rc.pdv_id
+     JOIN users m ON m.id = rc.master_id
+     LEFT JOIN users g ON g.id = rc.regle_par
+     WHERE rc.pdv_id = ANY($1) AND rc.statut='PAYE'
+     ORDER BY rc.paid_at DESC NULLS LAST LIMIT 200`, [pdvIds]);
+
+  const stats = await pool.query(
+    `SELECT COALESCE(SUM(montant_fcfa),0) AS total,
+       COALESCE(SUM(montant_fcfa) FILTER (WHERE regle_par_role='COMMERCIAL'),0) AS total_commercial,
+       COALESCE(SUM(montant_fcfa) FILTER (WHERE regle_par_role='MASTER'),0) AS total_master,
+       COALESCE(SUM(montant_fcfa) FILTER (WHERE paid_at >= date_trunc('day', now())),0) AS total_jour
+     FROM uv_recharges WHERE pdv_id = ANY($1) AND statut='PAYE'`, [pdvIds]);
+
+  res.json({ zone: { id: zone.id, nom: zone.nom }, items: items.rows, stats: stats.rows[0] });
 }));
 
 /* ---- Supervision des fonds Master (SUPERVISEUR uniquement) ---- */
