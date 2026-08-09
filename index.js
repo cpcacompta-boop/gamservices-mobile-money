@@ -207,6 +207,13 @@ async function ensureCaisseSchema() {
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par_role TEXT",
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS mode_paiement TEXT",
     "CREATE TABLE IF NOT EXISTS versements (id SERIAL PRIMARY KEY, commercial_id INTEGER, master_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, statut TEXT NOT NULL DEFAULT 'EN_ATTENTE', created_at TIMESTAMPTZ DEFAULT now(), confirmed_at TIMESTAMPTZ)",
+    // Auto-réparation si une table "versements" pré-existait sans toutes ses colonnes :
+    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS commercial_id INTEGER",
+    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS master_id INTEGER",
+    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS montant NUMERIC NOT NULL DEFAULT 0",
+    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS statut TEXT NOT NULL DEFAULT 'EN_ATTENTE'",
+    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
+    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ",
     "CREATE INDEX IF NOT EXISTS versements_commercial ON versements(commercial_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS versements_master ON versements(master_id, statut)"
   ];
