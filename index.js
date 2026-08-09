@@ -197,6 +197,25 @@ async function seedSuperviseur() {
   }
 }
 
+// Schéma "caisse" garanti : s'exécute TOUJOURS au démarrage (même si migrate() a échoué avant),
+// chaque instruction isolée pour qu'un souci ne bloque jamais les suivantes. 100% idempotent.
+async function ensureCaisseSchema() {
+  const stmts = [
+    "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS remis BOOLEAN NOT NULL DEFAULT TRUE",
+    "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS versement_id INTEGER",
+    "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par INTEGER",
+    "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par_role TEXT",
+    "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS mode_paiement TEXT",
+    "CREATE TABLE IF NOT EXISTS versements (id SERIAL PRIMARY KEY, commercial_id INTEGER, master_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, statut TEXT NOT NULL DEFAULT 'EN_ATTENTE', created_at TIMESTAMPTZ DEFAULT now(), confirmed_at TIMESTAMPTZ)",
+    "CREATE INDEX IF NOT EXISTS versements_commercial ON versements(commercial_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS versements_master ON versements(master_id, statut)"
+  ];
+  for (const s of stmts) {
+    try { await pool.query(s); }
+    catch (e) { console.error('ensureCaisseSchema:', e.message); }
+  }
+}
+
 /* =====================================================================
    HELPERS
    ===================================================================== */
@@ -1063,12 +1082,16 @@ setInterval(() => {
 }, 30000);
 
 migrate()
-  .then(() => server.listen(PORT, () => {
-    console.log('\u2714 GAMServices demarre (HTTP + WebSocket) sur le port ' + PORT);
-    checkOverdueRecharges();                          // vérif immédiate au démarrage
-    setInterval(checkOverdueRecharges, 10 * 60 * 1000); // puis toutes les 10 minutes
-  }))
-  .catch(err => {
+  .then(async () => {
+    await ensureCaisseSchema();
+    server.listen(PORT, () => {
+      console.log('\u2714 GAMServices demarre (HTTP + WebSocket) sur le port ' + PORT);
+      checkOverdueRecharges();                          // vérif immédiate au démarrage
+      setInterval(checkOverdueRecharges, 10 * 60 * 1000); // puis toutes les 10 minutes
+    });
+  })
+  .catch(async err => {
     console.error('\u2718 Echec migration au demarrage :', err.message);
+    await ensureCaisseSchema(); // on garantit quand même le schéma caisse
     server.listen(PORT, () => console.log('\u26a0 Serveur demarre (migration en erreur) port ' + PORT));
   });
