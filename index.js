@@ -114,6 +114,9 @@ async function migrate() {
   await pool.query(`ALTER TABLE zones ADD COLUMN IF NOT EXISTS responsable_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE zones ADD COLUMN IF NOT EXISTS suppleant_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE zones ADD COLUMN IF NOT EXISTS quartiers TEXT`);
+  // Rattachement SOLIDE d'un PDV à une zone (lien fiable pour le recouvrement du commercial,
+  // en plus du champ texte "zone" conservé pour l'affichage et la compatibilité).
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS zone_id INTEGER REFERENCES zones(id) ON DELETE SET NULL`);
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -519,6 +522,92 @@ app.post('/master/returns', requireRole('MASTER'), wrap(async (req, res) => {
   res.json({ ok: true, fund: fund.rows[0], ret: ret.rows[0] });
 }));
 
+/* =====================================================================
+   RECOUVREMENT — ESPACE COMMERCIAL
+   Le commercial est responsable (ou suppléant) d'une zone. Il passe chez les
+   PDV de sa zone encaisser le CASH (FCFA) des recharges restées "en attente",
+   quel que soit le Master qui les a faites. Il ne recharge jamais, ne touche
+   jamais à l'UV. Quand il encaisse, le fonds FCFA du Master concerné augmente
+   et le Master est notifié en direct.
+   ===================================================================== */
+const _norm = (s) => String(s || '').trim().toLowerCase();
+
+// La zone dont ce commercial est responsable (priorité) ou suppléant.
+async function getCommercialZone(userId) {
+  const z = await pool.query(
+    'SELECT id, nom, quartiers FROM zones WHERE responsable_id=$1 OR suppleant_id=$1 ORDER BY (responsable_id=$1) DESC LIMIT 1',
+    [userId]);
+  return z.rows[0] || null;
+}
+
+// Les PDV appartenant à une zone : lien solide (zone_id) + filet de secours pour
+// les anciens PDV sans zone_id (match par nom de zone ou par quartier de la zone).
+async function getZonePdvIds(zone) {
+  const ids = new Set();
+  const solid = await pool.query("SELECT id FROM users WHERE role='PDV' AND actif=TRUE AND zone_id=$1", [zone.id]);
+  solid.rows.forEach(r => ids.add(Number(r.id)));
+  const quartierSet = new Set(String(zone.quartiers || '').split(',').map(q => _norm(q)).filter(Boolean));
+  const legacy = await pool.query("SELECT id, zone, quartier FROM users WHERE role='PDV' AND actif=TRUE AND zone_id IS NULL");
+  for (const p of legacy.rows) {
+    if (_norm(p.zone) === _norm(zone.nom) || quartierSet.has(_norm(p.quartier))) ids.add(Number(p.id));
+  }
+  return Array.from(ids);
+}
+
+// Liste des PDV de la zone du commercial ayant du cash en attente + détail des recharges
+app.get('/commercial/collections', requireRole('COMMERCIAL'), wrap(async (req, res) => {
+  const zone = await getCommercialZone(req.user.id);
+  if (!zone) return res.json({ zone: null, pdvs: [] });
+  const pdvIds = await getZonePdvIds(zone);
+  if (!pdvIds.length) return res.json({ zone: { id: zone.id, nom: zone.nom }, pdvs: [] });
+
+  const pdvsQ = await pool.query(
+    `SELECT id, username, nom_commercial, ville, quartier,
+            nom_gerant, contact_gerant, nom_responsable, contact_responsable,
+            last_lat AS lat, last_lng AS lng
+     FROM users WHERE id = ANY($1) ORDER BY nom_commercial NULLS LAST, username`, [pdvIds]);
+
+  const rcQ = await pool.query(
+    `SELECT rc.id, rc.pdv_id, rc.montant_fcfa, rc.type_fonds, rc.created_at,
+            m.id AS master_id, m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username
+     FROM uv_recharges rc JOIN users m ON m.id = rc.master_id
+     WHERE rc.pdv_id = ANY($1) AND rc.statut='EN_ATTENTE'
+     ORDER BY rc.created_at`, [pdvIds]);
+
+  const byPdv = {};
+  for (const r of rcQ.rows) { (byPdv[r.pdv_id] = byPdv[r.pdv_id] || []).push(r); }
+  const pdvs = pdvsQ.rows.map(p => {
+    const list = byPdv[p.id] || [];
+    const total = list.reduce((s, r) => s + Number(r.montant_fcfa || 0), 0);
+    return Object.assign({}, p, { recharges: list, total_attente: total, nb_attente: list.length });
+  }).filter(p => p.nb_attente > 0); // on n'affiche que les PDV où il y a du cash à récupérer
+
+  res.json({ zone: { id: zone.id, nom: zone.nom }, pdvs });
+}));
+
+// Le commercial encaisse UNE recharge (cash FCFA) chez un PDV de sa zone -> crédite le Master
+app.post('/commercial/recharges/:id/collect', requireRole('COMMERCIAL'), wrap(async (req, res) => {
+  const rcq = await pool.query('SELECT * FROM uv_recharges WHERE id=$1', [req.params.id]);
+  if (!rcq.rows.length) return res.status(404).json({ error: 'Recharge introuvable' });
+  const rc = rcq.rows[0];
+  if (rc.statut === 'PAYE') return res.json({ ok: true, already: true });
+
+  // Sécurité : le PDV doit bien appartenir à la zone de ce commercial
+  const zone = await getCommercialZone(req.user.id);
+  if (!zone) return res.status(403).json({ error: "Tu n'es rattaché à aucune zone" });
+  const pdvIds = await getZonePdvIds(zone);
+  if (!pdvIds.includes(Number(rc.pdv_id))) return res.status(403).json({ error: "Ce point de vente n'est pas dans ta zone" });
+
+  const montant = Number(rc.montant_fcfa);
+  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement='FCFA', paid_at=now() WHERE id=$1", [rc.id]);
+  const fund = await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, rc.master_id]);
+
+  const commercialNom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
+  sendToUser(rc.master_id, { type: 'recharge_collected', fund: fund.rows[0], montant, commercial: commercialNom });
+  broadcastToSupervisors({ type: 'recharge_paid', masterId: rc.master_id, id: rc.id, mode_paiement: 'FCFA', par: 'COMMERCIAL' });
+  res.json({ ok: true, fund: fund.rows[0] });
+}));
+
 /* ---- Supervision des fonds Master (SUPERVISEUR uniquement) ---- */
 
 // Le superviseur crédite manuellement le fonds (UV et/ou FCFA) d'un Master
@@ -681,8 +770,14 @@ app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
     return res.status(400).json({ error: 'Rôle invalide' });
   const exists = await pool.query('SELECT 1 FROM users WHERE username=$1', [username]);
   if (exists.rows.length) return res.status(400).json({ error: 'Cet identifiant existe déjà' });
-  const cols = ['username','pass_hash','role','must_change_password','nom','prenoms','contact','code','photo','piece_recto','piece_verso','nom_commercial','ville','quartier','zone','situation_geo','gps','nom_responsable','contact_responsable','nom_gerant','contact_gerant','photo_local'];
-  const vals = [username, hashPass(DEFAULT_PASSWORD), role, true, b.nom||null, b.prenoms||null, b.contact||null, b.code||null, b.photo||null, b.piece_recto||null, b.piece_verso||null, b.nom_commercial||null, b.ville||null, b.quartier||null, b.zone||null, b.situation_geo||null, b.gps||null, b.nom_responsable||null, b.contact_responsable||null, b.nom_gerant||null, b.contact_gerant||null, b.photo_local||null];
+  // PDV : on rattache solidement à sa zone (zone_id) et on stocke aussi le nom de zone en clair.
+  let pdvZoneId = null;
+  if (role === 'PDV' && b.zone_id) {
+    const zq = await pool.query('SELECT nom FROM zones WHERE id=$1', [b.zone_id]);
+    if (zq.rows.length) { pdvZoneId = Number(b.zone_id); b.zone = zq.rows[0].nom; }
+  }
+  const cols = ['username','pass_hash','role','must_change_password','nom','prenoms','contact','code','photo','piece_recto','piece_verso','nom_commercial','ville','quartier','zone','situation_geo','gps','nom_responsable','contact_responsable','nom_gerant','contact_gerant','photo_local','zone_id'];
+  const vals = [username, hashPass(DEFAULT_PASSWORD), role, true, b.nom||null, b.prenoms||null, b.contact||null, b.code||null, b.photo||null, b.piece_recto||null, b.piece_verso||null, b.nom_commercial||null, b.ville||null, b.quartier||null, b.zone||null, b.situation_geo||null, b.gps||null, b.nom_responsable||null, b.contact_responsable||null, b.nom_gerant||null, b.contact_gerant||null, b.photo_local||null, pdvZoneId];
   const ph = vals.map((_, i) => '$' + (i + 1)).join(',');
   const r = await pool.query(`INSERT INTO users (${cols.join(',')}) VALUES (${ph}) RETURNING id, username, role, nom, prenoms, contact, code, actif`, vals);
   // Si c'est un commercial rattaché à une zone, il en devient le responsable
@@ -695,16 +790,23 @@ app.post('/users', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
 // Modifier les informations d'un agent (diffuse en direct)
 app.put('/users/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const b = req.body;
+  // Si un zone_id est fourni (PDV), on récupère le nom de la zone pour garder le champ texte cohérent.
+  let zoneIdVal = null, zoneNameVal = b.zone || null;
+  if (b.zone_id) {
+    const zq = await pool.query('SELECT nom FROM zones WHERE id=$1', [b.zone_id]);
+    if (zq.rows.length) { zoneIdVal = Number(b.zone_id); zoneNameVal = zq.rows[0].nom; }
+  }
   await pool.query(
     `UPDATE users SET nom=$1, prenoms=$2, contact=$3, code=$4,
        nom_commercial=$5, ville=$6, quartier=$7, zone=$8, situation_geo=$9, gps=$10,
        nom_responsable=$11, contact_responsable=$12, nom_gerant=$13, contact_gerant=$14,
-       photo=COALESCE($15,photo), piece_recto=COALESCE($16,piece_recto), piece_verso=COALESCE($17,piece_verso), photo_local=COALESCE($18,photo_local)
-     WHERE id=$19`,
+       photo=COALESCE($15,photo), piece_recto=COALESCE($16,piece_recto), piece_verso=COALESCE($17,piece_verso), photo_local=COALESCE($18,photo_local),
+       zone_id=$19
+     WHERE id=$20`,
     [b.nom||null, b.prenoms||null, b.contact||null, b.code||null,
-     b.nom_commercial||null, b.ville||null, b.quartier||null, b.zone||null, b.situation_geo||null, b.gps||null,
+     b.nom_commercial||null, b.ville||null, b.quartier||null, zoneNameVal, b.situation_geo||null, b.gps||null,
      b.nom_responsable||null, b.contact_responsable||null, b.nom_gerant||null, b.contact_gerant||null,
-     b.photo||null, b.piece_recto||null, b.piece_verso||null, b.photo_local||null, req.params.id]);
+     b.photo||null, b.piece_recto||null, b.piece_verso||null, b.photo_local||null, zoneIdVal, req.params.id]);
   const r = await pool.query('SELECT id, username, role, nom, prenoms, contact, code, actif FROM users WHERE id=$1', [req.params.id]);
   if (r.rows.length) { const u = r.rows[0]; sendToUser(u.id, { type:'profile_updated', user:u }); broadcastToSupervisors({ type:'profile_updated', user:u }); }
   res.json({ ok: true });
