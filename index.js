@@ -165,6 +165,22 @@ async function migrate() {
   // Traçabilité du règlement : qui a encaissé (le Master lui-même, ou un Commercial de la zone) ?
   await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par INTEGER REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par_role TEXT`);
+  // Cash encaissé par un commercial mais PAS encore reversé au Master : remis=FALSE (en main / en transit).
+  // Par défaut TRUE (paiements directs du Master = déjà chez lui). Seul l'encaissement commercial met FALSE.
+  await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS remis BOOLEAN NOT NULL DEFAULT TRUE`);
+  await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS versement_id INTEGER`);
+  // Versements du commercial au Master (arrêté de caisse), confirmés des deux côtés en harmonie.
+  await pool.query(`CREATE TABLE IF NOT EXISTS versements (
+    id SERIAL PRIMARY KEY,
+    commercial_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    master_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    montant NUMERIC NOT NULL DEFAULT 0,
+    statut TEXT NOT NULL DEFAULT 'EN_ATTENTE',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    confirmed_at TIMESTAMPTZ
+  )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS versements_commercial ON versements(commercial_id, created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS versements_master ON versements(master_id, statut)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS uv_recharges_master ON uv_recharges(master_id, created_at DESC)`);
   await seedSuperviseur();
   console.log('\u2714 Migration terminee : base a jour.');
@@ -402,7 +418,7 @@ app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
       COALESCE((SELECT SUM(fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_fcfa,
       COALESCE((SELECT SUM(uv) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_uv,
       COALESCE((SELECT SUM(fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_fcfa,
-      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE'), 0) AS en_attente_reel
+      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND (statut='EN_ATTENTE' OR (statut='PAYE' AND remis=FALSE))), 0) AS en_attente_reel
     FROM users u WHERE u.id=$1`, [req.user.id]);
   const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite_uv: 0, total_credite_fcfa: 0, total_retourne_uv: 0, total_retourne_fcfa: 0, en_attente_reel: 0 };
   res.json(computeFundBreakdown(row));
@@ -604,13 +620,12 @@ app.post('/commercial/recharges/:id/collect', requireRole('COMMERCIAL'), wrap(as
   if (!pdvIds.includes(Number(rc.pdv_id))) return res.status(403).json({ error: "Ce point de vente n'est pas dans ta zone" });
 
   const montant = Number(rc.montant_fcfa);
-  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement='FCFA', regle_par=$1, regle_par_role='COMMERCIAL', paid_at=now() WHERE id=$2", [req.user.id, rc.id]);
-  const fund = await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, rc.master_id]);
-
+  // Encaissement terrain : l'argent est EN MAIN du commercial, à reverser au Master.
+  // Le fonds du Master ne bouge PAS ici : il sera crédité seulement à la confirmation du versement.
+  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement='FCFA', regle_par=$1, regle_par_role='COMMERCIAL', remis=FALSE, paid_at=now() WHERE id=$2", [req.user.id, rc.id]);
   const commercialNom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
-  sendToUser(rc.master_id, { type: 'recharge_collected', fund: fund.rows[0], montant, commercial: commercialNom });
-  broadcastToSupervisors({ type: 'recharge_paid', masterId: rc.master_id, id: rc.id, mode_paiement: 'FCFA', par: 'COMMERCIAL' });
-  res.json({ ok: true, fund: fund.rows[0] });
+  sendToUser(rc.master_id, { type: 'collected_pending_remit', montant, commercial: commercialNom });
+  res.json({ ok: true });
 }));
 
 // Historique des encaissements de la zone (pour le point du commercial) : qui a réglé (Master ou Commercial), combien, quand
@@ -641,6 +656,128 @@ app.get('/commercial/history', requireRole('COMMERCIAL'), wrap(async (req, res) 
      FROM uv_recharges WHERE pdv_id = ANY($1) AND statut='PAYE'`, [pdvIds]);
 
   res.json({ zone: { id: zone.id, nom: zone.nom }, items: items.rows, stats: stats.rows[0] });
+}));
+
+/* ---- CAISSE COMMERCIAL : en main, versements au Master, arrêté de caisse ---- */
+
+// Le commercial déclare un versement au Master (tout ce qu'il a en main pour CE master)
+app.post('/commercial/versements', requireRole('COMMERCIAL'), wrap(async (req, res) => {
+  const masterId = Number(req.body.master_id);
+  if (!masterId) return res.status(400).json({ error: 'Master manquant' });
+  const zone = await getCommercialZone(req.user.id);
+  if (!zone) return res.status(403).json({ error: "Tu n'es rattaché à aucune zone" });
+  const pdvIds = await getZonePdvIds(zone);
+  if (!pdvIds.length) return res.status(400).json({ error: 'Aucun PDV dans ta zone' });
+  const inHand = await pool.query(
+    `SELECT id, montant_fcfa FROM uv_recharges
+     WHERE pdv_id = ANY($1) AND master_id=$2 AND regle_par=$3 AND regle_par_role='COMMERCIAL'
+       AND remis=FALSE AND versement_id IS NULL AND statut='PAYE'`, [pdvIds, masterId, req.user.id]);
+  if (!inHand.rows.length) return res.status(400).json({ error: "Tu n'as rien en main à verser à ce Master" });
+  const montant = inHand.rows.reduce((s, r) => s + Number(r.montant_fcfa || 0), 0);
+  const v = await pool.query(
+    "INSERT INTO versements (commercial_id, master_id, montant, statut) VALUES ($1,$2,$3,'EN_ATTENTE') RETURNING *",
+    [req.user.id, masterId, montant]);
+  await pool.query("UPDATE uv_recharges SET versement_id=$1 WHERE id = ANY($2)", [v.rows[0].id, inHand.rows.map(r => r.id)]);
+  const commercialNom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
+  sendToUser(masterId, { type: 'versement_pending', montant, commercial: commercialNom });
+  res.json({ ok: true, versement: v.rows[0] });
+}));
+
+// Caisse du commercial : en main (par master), en transit, historique versements, arrêté du jour
+app.get('/commercial/caisse', requireRole('COMMERCIAL'), wrap(async (req, res) => {
+  const zone = await getCommercialZone(req.user.id);
+  const dateStr = (req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)) ? req.query.date : new Date().toISOString().slice(0, 10);
+  const empty = { zone: null, en_main: [], en_transit: [], versements: [], totals: { encaisse: 0, verse: 0, en_main: 0, en_transit: 0 }, jour: { date: dateStr, encaisse: 0, verse: 0 } };
+  if (!zone) return res.json(empty);
+  const pdvIds = await getZonePdvIds(zone);
+  const cid = req.user.id;
+
+  const enMain = pdvIds.length ? (await pool.query(
+    `SELECT rc.master_id, m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username,
+            COALESCE(SUM(rc.montant_fcfa),0) AS montant, COUNT(*) AS nb
+     FROM uv_recharges rc JOIN users m ON m.id=rc.master_id
+     WHERE rc.pdv_id = ANY($1) AND rc.regle_par=$2 AND rc.regle_par_role='COMMERCIAL'
+       AND rc.remis=FALSE AND rc.versement_id IS NULL AND rc.statut='PAYE'
+     GROUP BY rc.master_id, m.nom, m.prenoms, m.username
+     HAVING COALESCE(SUM(rc.montant_fcfa),0) > 0
+     ORDER BY montant DESC`, [pdvIds, cid])).rows : [];
+
+  const enTransit = (await pool.query(
+    `SELECT v.id, v.montant, v.created_at, m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username
+     FROM versements v JOIN users m ON m.id=v.master_id
+     WHERE v.commercial_id=$1 AND v.statut='EN_ATTENTE' ORDER BY v.created_at DESC`, [cid])).rows;
+
+  const versements = (await pool.query(
+    `SELECT v.id, v.montant, v.statut, v.created_at, v.confirmed_at, m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username
+     FROM versements v JOIN users m ON m.id=v.master_id
+     WHERE v.commercial_id=$1 AND v.statut IN ('CONFIRME','REJETE')
+     ORDER BY COALESCE(v.confirmed_at, v.created_at) DESC LIMIT 100`, [cid])).rows;
+
+  const totEncaisse = pdvIds.length ? Number((await pool.query(
+    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE pdv_id=ANY($1) AND regle_par=$2 AND regle_par_role='COMMERCIAL' AND statut='PAYE'", [pdvIds, cid])).rows[0].s) : 0;
+  const totVerse = Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM versements WHERE commercial_id=$1 AND statut='CONFIRME'", [cid])).rows[0].s);
+  const totEnMain = enMain.reduce((s, r) => s + Number(r.montant), 0);
+  const totEnTransit = enTransit.reduce((s, r) => s + Number(r.montant), 0);
+
+  const encaisseJour = pdvIds.length ? Number((await pool.query(
+    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE pdv_id=ANY($1) AND regle_par=$2 AND regle_par_role='COMMERCIAL' AND statut='PAYE' AND paid_at::date=$3::date", [pdvIds, cid, dateStr])).rows[0].s) : 0;
+  const verseJour = Number((await pool.query(
+    "SELECT COALESCE(SUM(montant),0) s FROM versements WHERE commercial_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [cid, dateStr])).rows[0].s);
+
+  res.json({
+    zone: { id: zone.id, nom: zone.nom }, en_main: enMain, en_transit: enTransit, versements,
+    totals: { encaisse: totEncaisse, verse: totVerse, en_main: totEnMain, en_transit: totEnTransit },
+    jour: { date: dateStr, encaisse: encaisseJour, verse: verseJour }
+  });
+}));
+
+// Le Master confirme la réception d'un versement -> son fonds FCFA est crédité (système = réalité)
+app.post('/master/versements/:id/confirm', requireRole('MASTER'), wrap(async (req, res) => {
+  const vq = await pool.query('SELECT * FROM versements WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
+  if (!vq.rows.length) return res.status(404).json({ error: 'Versement introuvable' });
+  const v = vq.rows[0];
+  if (v.statut === 'CONFIRME') return res.json({ ok: true, already: true });
+  if (v.statut === 'REJETE') return res.status(400).json({ error: 'Ce versement a été rejeté' });
+  await pool.query("UPDATE versements SET statut='CONFIRME', confirmed_at=now() WHERE id=$1", [v.id]);
+  await pool.query('UPDATE uv_recharges SET remis=TRUE WHERE versement_id=$1', [v.id]);
+  const fund = await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [Number(v.montant), req.user.id]);
+  sendToUser(v.commercial_id, { type: 'versement_confirmed', montant: Number(v.montant) });
+  broadcastToSupervisors({ type: 'recharge_paid', masterId: req.user.id, id: v.id });
+  res.json({ ok: true, fund: fund.rows[0] });
+}));
+
+// Le Master rejette un versement (montant non reçu) -> l'argent repasse "en main" du commercial
+app.post('/master/versements/:id/reject', requireRole('MASTER'), wrap(async (req, res) => {
+  const vq = await pool.query('SELECT * FROM versements WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
+  if (!vq.rows.length) return res.status(404).json({ error: 'Versement introuvable' });
+  const v = vq.rows[0];
+  if (v.statut !== 'EN_ATTENTE') return res.status(400).json({ error: 'Ce versement a déjà été traité' });
+  await pool.query("UPDATE versements SET statut='REJETE', confirmed_at=now() WHERE id=$1", [v.id]);
+  await pool.query('UPDATE uv_recharges SET versement_id=NULL WHERE versement_id=$1', [v.id]);
+  sendToUser(v.commercial_id, { type: 'versement_rejected', montant: Number(v.montant) });
+  res.json({ ok: true });
+}));
+
+// Caisse du Master : versements à confirmer + arrêté du jour (FCFA direct, FCFA reçu, UV) + solde pour le contrôle
+app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
+  const mid = req.user.id;
+  const dateStr = (req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)) ? req.query.date : new Date().toISOString().slice(0, 10);
+  const pending = (await pool.query(
+    `SELECT v.id, v.montant, v.created_at, c.nom AS commercial_nom, c.prenoms AS commercial_prenoms, c.username AS commercial_username
+     FROM versements v JOIN users c ON c.id=v.commercial_id
+     WHERE v.master_id=$1 AND v.statut='EN_ATTENTE' ORDER BY v.created_at`, [mid])).rows;
+  const fcfaDirect = Number((await pool.query(
+    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND regle_par_role='MASTER' AND (mode_paiement IS NULL OR mode_paiement='FCFA') AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
+  const uvJour = Number((await pool.query(
+    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND mode_paiement='UV' AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
+  const fcfaVerse = Number((await pool.query(
+    "SELECT COALESCE(SUM(montant),0) s FROM versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
+  const u = (await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [mid])).rows[0] || { solde_uv: 0, solde_fcfa: 0 };
+  res.json({
+    pending,
+    solde: u,
+    jour: { date: dateStr, fcfa_direct: fcfaDirect, fcfa_verse: fcfaVerse, fcfa_total: fcfaDirect + fcfaVerse, uv: uvJour }
+  });
 }));
 
 /* ---- Supervision des fonds Master (SUPERVISEUR uniquement) ---- */
@@ -751,7 +888,7 @@ app.get('/masters/:id/summary', requireRole('SUPERVISEUR'), wrap(async (req, res
       COALESCE((SELECT SUM(fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_fcfa,
       COALESCE((SELECT SUM(uv) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_uv,
       COALESCE((SELECT SUM(fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_fcfa,
-      COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'), 0) AS en_attente_reel
+      COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE' OR (rc.statut='PAYE' AND rc.remis=FALSE)), 0) AS en_attente_reel
     FROM users u
     LEFT JOIN uv_recharges rc ON rc.master_id = u.id
     WHERE u.id=$1 AND u.role='MASTER'
