@@ -156,6 +156,9 @@ async function migrate() {
   // Type de recharge : 'UV' (le Master puise dans son stock UV, cas historique) ou
   // 'FCFA' (le Master avance directement du cash à un PDV — même processus, autre fonds).
   await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS type_fonds TEXT NOT NULL DEFAULT 'UV'`);
+  // Mode de règlement choisi au paiement : 'FCFA' (le PDV paie en cash) ou 'UV' (le PDV rend de l'UV = retour).
+  // Reste NULL tant que la recharge n'est pas payée.
+  await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS mode_paiement TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS uv_recharges_master ON uv_recharges(master_id, created_at DESC)`);
   await seedSuperviseur();
   console.log('\u2714 Migration terminee : base a jour.');
@@ -430,6 +433,8 @@ app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const typeFonds = req.body.type_fonds === 'FCFA' ? 'FCFA' : 'UV';
   const montant = numOrNaN(req.body.montant_uv);
   const paidNow = !!req.body.paid_now;
+  // Mode de règlement (uniquement si payé tout de suite) : 'FCFA' (cash) ou 'UV' (retour d'UV). Défaut : FCFA.
+  const modePaiement = paidNow ? (req.body.mode_paiement === 'UV' ? 'UV' : 'FCFA') : null;
   if (!pdvId || !(montant > 0)) return res.status(400).json({ error: 'Le point de vente et le montant sont obligatoires' });
 
   const pdv = await pool.query("SELECT id FROM users WHERE id=$1 AND role='PDV' AND actif=TRUE", [pdvId]);
@@ -448,21 +453,24 @@ app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
 
   const statut = paidNow ? 'PAYE' : 'EN_ATTENTE';
   const r = await pool.query(
-    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, type_fonds, paid_at)
-     VALUES ($1,$2,$3,$4,$5,$6,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
-    [req.user.id, pdvId, montantUvCol, montantFcfaCol, statut, typeFonds]);
+    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, type_fonds, mode_paiement, paid_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
+    [req.user.id, pdvId, montantUvCol, montantFcfaCol, statut, typeFonds, modePaiement]);
 
-  let fund;
-  if (typeFonds === 'UV') {
-    fund = paidNow
-      ? await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa', [montant, montant, req.user.id])
-      : await pool.query('UPDATE users SET solde_uv=solde_uv-$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
-  } else {
-    // Avance FCFA directe : débit immédiat du fonds FCFA, remboursement immédiat si déjà payé (net = 0)
-    fund = paidNow
-      ? await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [req.user.id])
-      : await pool.query('UPDATE users SET solde_fcfa=solde_fcfa-$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
-  }
+  // ---- Mise à jour du fonds : modèle unifié (débit selon le type, crédit selon le mode) ----
+  // DÉBIT (ce que le Master donne au PDV), toujours au moment de la recharge :
+  //   - type UV   -> il sort de l'UV   : solde_uv  − montant
+  //   - type FCFA -> il avance du cash : solde_fcfa − montant
+  // CRÉDIT (ce que le PDV rend), UNIQUEMENT si payé tout de suite (sinon au règlement via /pay) :
+  //   - mode FCFA -> le PDV paie en cash          : solde_fcfa + montant
+  //   - mode UV   -> le PDV rend de l'UV (retour) : solde_uv  + montant
+  // Dans tous les cas le fonds total (UV + FCFA) reste cohérent avec le total crédité par le superviseur.
+  let deltaUv = 0, deltaFcfa = 0;
+  if (typeFonds === 'UV') deltaUv -= montant; else deltaFcfa -= montant;
+  if (paidNow) { if (modePaiement === 'UV') deltaUv += montant; else deltaFcfa += montant; }
+  const fund = await pool.query(
+    'UPDATE users SET solde_uv=solde_uv+$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
+    [deltaUv, deltaFcfa, req.user.id]);
 
   broadcastToSupervisors({ type: 'recharge_created', masterId: req.user.id, recharge: r.rows[0] });
   res.json({ ok: true, recharge: r.rows[0], fund: fund.rows[0] });
@@ -473,10 +481,18 @@ app.post('/master/recharges/:id/pay', requireRole('MASTER'), wrap(async (req, re
   const rc = await pool.query('SELECT * FROM uv_recharges WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
   if (!rc.rows.length) return res.status(404).json({ error: 'Recharge introuvable' });
   if (rc.rows[0].statut === 'PAYE') return res.json({ ok: true, already: true });
-  await pool.query("UPDATE uv_recharges SET statut='PAYE', paid_at=now() WHERE id=$1", [req.params.id]);
-  const fund = await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa',
-    [rc.rows[0].montant_fcfa, req.user.id]);
-  broadcastToSupervisors({ type: 'recharge_paid', masterId: req.user.id, id: Number(req.params.id) });
+  // Le Master indique ce que le PDV lui a remis pour régler cette recharge :
+  //   - 'FCFA' : le PDV paie en cash          -> le fonds FCFA du Master augmente
+  //   - 'UV'   : le PDV rend de l'UV (retour) -> le fonds UV du Master augmente
+  // 1 UV = 1 FCFA : montant_fcfa porte toujours le montant dû.
+  const modePaiement = req.body.mode_paiement === 'UV' ? 'UV' : 'FCFA';
+  const montant = Number(rc.rows[0].montant_fcfa);
+  await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement=$1, paid_at=now() WHERE id=$2",
+    [modePaiement, req.params.id]);
+  const fund = modePaiement === 'UV'
+    ? await pool.query('UPDATE users SET solde_uv=solde_uv+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id])
+    : await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
+  broadcastToSupervisors({ type: 'recharge_paid', masterId: req.user.id, id: Number(req.params.id), mode_paiement: modePaiement });
   res.json({ ok: true, fund: fund.rows[0] });
 }));
 
