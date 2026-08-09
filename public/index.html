@@ -750,7 +750,9 @@
           En circulation chez les PDV (pas encore réglé)&nbsp;: <b style="color:var(--ink)">${fmtFcfa(m.en_circulation)}</b> FCFA
           ${Number(m.manquant||0)>0
             ? '<br><span style="color:var(--red);font-weight:700">⚠ Manquant détecté : '+fmtFcfa(m.manquant)+' FCFA</span>'
-            : '<br><span style="color:var(--pos);font-weight:700">✔ Tout est en règle, aucun manque détecté</span>'}
+            : (Number(m.en_circulation||0)>0
+                ? '<br><span style="color:var(--warn);font-weight:700">⏳ '+fmtFcfa(m.en_circulation)+' FCFA en attente de règlement chez les PDV — aucun manquant</span>'
+                : '<br><span style="color:var(--pos);font-weight:700">✔ Tout est réglé, aucun manque détecté</span>')}
         </div>
         <div class="fonds-card-body">
           <div style="font-size:11px;color:var(--ink-soft);margin-bottom:10px">
@@ -1159,16 +1161,28 @@
   // se transforme en FCFA dès qu'un PDV paie, donc un découpage par fonds donnerait un faux manquant.
   function renderFundStatus(fund){
     const m=Number(fund.manquant||0);
-    if(m<=0){
-      return `<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)">
-        <div style="padding:14px 20px;color:var(--pos);font-size:12px;font-weight:700">✔ Tout est en règle&nbsp;: Fonds UV + Fonds FCFA correspond bien au total crédité, aucun manque détecté.</div>
+    const enCirc=Number(fund.en_circulation||0);
+    // 1) Vrai manquant : une somme n'est ni dans le fonds, ni dans une recharge en attente -> ROUGE
+    if(m>0){
+      return `<div class="panel" style="background:var(--red-soft);border:1px solid var(--red)">
+        <div style="padding:14px 20px;color:var(--red);font-size:12px;font-weight:700;line-height:1.9">
+          ⚠ Manquant détecté&nbsp;: <b>${fmtFcfa(m)}</b> FCFA<br>
+          <span style="font-weight:500">Cette somme n'est ni dans le fonds actuel (UV + FCFA), ni dans une recharge en attente. Vérifie avec le superviseur.</span>
+        </div>
       </div>`;
     }
-    return `<div class="panel" style="background:var(--red-soft);border:1px solid var(--red)">
-      <div style="padding:14px 20px;color:var(--red);font-size:12px;font-weight:700;line-height:1.9">
-        ⚠ Manquant détecté&nbsp;: <b>${fmtFcfa(m)}</b> FCFA<br>
-        <span style="font-weight:500">Cette somme n'est ni dans le fonds actuel (UV + FCFA), ni dans une recharge en attente. Vérifie avec le superviseur.</span>
-      </div>
+    // 2) Aucun manquant mais de l'argent encore chez les PDV (recharges non réglées) -> EN ATTENTE (jaune)
+    if(enCirc>0){
+      return `<div class="panel" style="background:var(--warn-soft);border:1px solid var(--warn)">
+        <div style="padding:14px 20px;color:var(--warn);font-size:12px;font-weight:700;line-height:1.9">
+          ⏳ En attente de règlement&nbsp;: <b>${fmtFcfa(enCirc)}</b> FCFA encore chez les PDV.<br>
+          <span style="font-weight:500">Aucun manquant détecté — cette somme rentrera dès que les PDV auront réglé (en espèces ou en UV).</span>
+        </div>
+      </div>`;
+    }
+    // 3) Rien en circulation, rien de manquant -> TOUT RÉGLÉ (vert)
+    return `<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)">
+      <div style="padding:14px 20px;color:var(--pos);font-size:12px;font-weight:700">✔ Tout est en règle&nbsp;: Fonds UV + Fonds FCFA correspond au total crédité, aucun paiement en attente et aucun manque détecté.</div>
     </div>`;
   }
 
