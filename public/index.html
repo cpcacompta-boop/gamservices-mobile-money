@@ -680,11 +680,11 @@
     }
     if(v==='caisse' && S.auth.user.role==='COMMERCIAL'){
       const d=S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'';
-      try{ S.commCaisse=await api('/commercial/caisse'+d); }catch(e){ S.commCaisse=S.commCaisse||null; }
+      try{ S.commCaisse=await api('/commercial/caisse'+d); }catch(e){ S.commCaisse={_error:e.message||'Erreur serveur'}; }
     }
     if(v==='caisse' && S.auth.user.role==='MASTER'){
       const d=S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'';
-      try{ S.masterCaisse=await api('/master/caisse'+d); }catch(e){ S.masterCaisse=S.masterCaisse||null; }
+      try{ S.masterCaisse=await api('/master/caisse'+d); }catch(e){ S.masterCaisse={_error:e.message||'Erreur serveur'}; }
     }
   }
   function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
@@ -840,6 +840,14 @@
   /* ---------- MA CAISSE (arrêté de caisse : commercial & master) ---------- */
   function renderCaisse(){ return S.auth.user.role==='MASTER' ? renderCaisseMaster() : renderCaisseCommercial(); }
 
+  function caisseErrorPanel(msg){
+    return '<div class="panel"><div style="padding:26px;text-align:center">'+
+      '<div style="color:var(--red);font-size:13px;font-weight:800;margin-bottom:8px">⚠ Impossible de charger la caisse</div>'+
+      '<div style="color:var(--ink-soft);font-size:11px;line-height:1.7;margin-bottom:16px">'+esc(msg||'Erreur serveur')+'.<br>Si l\'erreur persiste, le serveur (index.js) doit être redéployé à la toute dernière version, puis redémarré.</div>'+
+      '<button class="btn small" data-caisse-retry type="button">Réessayer</button>'+
+    '</div></div>';
+  }
+
   function caisseDateFilterHtml(current){
     return '<div class="panel"><div style="padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
       '<label style="font-size:11px;color:var(--ink-soft);font-weight:700">Jour :</label>'+
@@ -856,8 +864,10 @@
 
   function renderCaisseCommercial(){
     const c=S.commCaisse;
-    if(!c || !c.zone){
-      return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;line-height:1.6;text-align:center">Tu n\'es rattaché à aucune zone.<br>Demande au superviseur de t\'affecter à une zone.</div></div>';
+    if(c && c._error){ return caisseErrorPanel(c._error); }
+    if(!c){ return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;text-align:center">Chargement…</div></div>'; }
+    if(!c.zone){
+      return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;line-height:1.6;text-align:center">Tu n\'es rattaché à aucune zone.<br>Demande au superviseur de t\'affecter comme responsable (ou suppléant) d\'une zone.</div></div>';
     }
     const t=c.totals||{};
     const header=`<div class="welcome"><h2>Ma caisse — ${esc(c.zone.nom)} 💼</h2><p>Ton point : ce que tu as encaissé, ce que tu as encore en main, et ce que tu as versé aux Masters.</p></div>
@@ -902,6 +912,7 @@
 
   function renderCaisseMaster(){
     const c=S.masterCaisse;
+    if(c && c._error){ return caisseErrorPanel(c._error); }
     if(!c){ return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;text-align:center">Chargement…</div></div>'; }
     const pending=c.pending||[];
     const header=`<div class="welcome"><h2>Ma caisse 💼</h2><p>Confirme les versements des commerciaux et vérifie que ta caisse tombe avec le système.</p></div>`;
@@ -1722,6 +1733,8 @@
         dlgSuccess('Versement rejeté','Le commercial a été notifié, l\'argent est de nouveau en main.');
       }catch(err){ b.disabled=false; b.textContent='Rejeter'; dlgError('Erreur',err.message); }
     }));
+    const cRetry=document.querySelector('[data-caisse-retry]');
+    if(cRetry) cRetry.addEventListener('click', ()=>{ loadView('caisse').then(renderView); });
     // ---- Ma caisse : filtre par date ----
     const dInput=document.querySelector('[data-caisse-date]');
     if(dInput) dInput.addEventListener('change', ()=>{ S.caisseDate=dInput.value||null; loadView('caisse').then(renderView); });
