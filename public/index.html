@@ -674,6 +674,9 @@
     if((v==='recouvrement' || v==='dashboard') && S.auth.user.role==='COMMERCIAL'){
       try{ S.collections=await api('/commercial/collections'); }catch(e){ S.collections=S.collections||{zone:null,pdvs:[]}; }
     }
+    if(v==='recouvrement' && S.auth.user.role==='COMMERCIAL'){
+      try{ S.recouvHistory=await api('/commercial/history'); }catch(e){ S.recouvHistory=S.recouvHistory||{items:[],stats:{}}; }
+    }
   }
   function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
@@ -839,7 +842,7 @@
         <div class="stat gold"><div class="lbl">Total à récupérer (FCFA)</div><div class="num">${fmtFcfa(totalGlobal)}</div></div>
       </div>`;
     if(!pdvs.length){
-      return header+'<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)"><div style="padding:22px;color:var(--pos);font-size:12px;font-weight:700;text-align:center">✔ Rien à recouvrer dans ta zone — tous les PDV sont à jour.</div></div>';
+      return header+'<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)"><div style="padding:22px;color:var(--pos);font-size:12px;font-weight:700;text-align:center">✔ Rien à recouvrer dans ta zone — tous les PDV sont à jour.</div></div>'+recouvHistoryHtml();
     }
     const cards=pdvs.map(function(p){
       const nm=p.nom_commercial||p.username;
@@ -869,7 +872,43 @@
         '</table></div>'+
       '</div>';
     }).join('');
-    return header+cards;
+    return header+cards+recouvHistoryHtml();
+  }
+
+  /* Historique des encaissements de la zone — pour le point du commercial (qui a encaissé : Master ou Commercial) */
+  function recouvHistoryHtml(){
+    const h=S.recouvHistory||{items:[],stats:{}};
+    const st=h.stats||{}; const items=h.items||[];
+    const stats='<div class="stat-row" style="margin-top:6px">'+
+      '<div class="stat"><div class="lbl">Encaissé aujourd\'hui</div><div class="num">'+fmtFcfa(st.total_jour)+'</div></div>'+
+      '<div class="stat gold"><div class="lbl">Total encaissé</div><div class="num">'+fmtFcfa(st.total)+'</div></div>'+
+      '<div class="stat"><div class="lbl">Par le commercial</div><div class="num">'+fmtFcfa(st.total_commercial)+'</div></div>'+
+      '<div class="stat"><div class="lbl">Par le Master (direct)</div><div class="num">'+fmtFcfa(st.total_master)+'</div></div>'+
+    '</div>';
+    const rows=items.length?items.map(function(it){
+      const pdv=it.nom_commercial||it.pdv_username||'—';
+      const master=[it.master_nom,it.master_prenoms].filter(Boolean).join(' ')||it.master_username;
+      const who=[it.regle_nom,it.regle_prenoms].filter(Boolean).join(' ')||it.regle_username||'—';
+      const roleTag=it.regle_par_role==='COMMERCIAL'
+        ? '<span class="pill" style="background:#E4ECFB;color:var(--brand)">Commercial</span>'
+        : (it.regle_par_role==='MASTER'?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Master</span>':'');
+      const modeTag=it.mode_paiement==='UV'
+        ? '<span class="pill" style="background:rgba(200,155,60,.18);color:var(--gold)">UV</span>'
+        : '<span class="pill" style="background:var(--surface-2);color:var(--ink-soft)">FCFA</span>';
+      return '<tr>'+
+        '<td>'+esc(pdv)+'</td>'+
+        '<td><b>'+fmtFcfa(it.montant_fcfa)+'</b> FCFA</td>'+
+        '<td>'+modeTag+'</td>'+
+        '<td>'+roleTag+' '+esc(who)+'</td>'+
+        '<td>'+esc(master)+'</td>'+
+        '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(it.paid_at)+'</td>'+
+      '</tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="6">Aucun encaissement enregistré pour le moment</td></tr>';
+    return stats+'<div class="panel"><div class="panel-head"><h3>Historique des encaissements</h3><span class="hint">Ton point : qui a encaissé (Master ou Commercial), combien et quand</span></div>'+
+      '<div class="table-wrap"><table>'+
+        '<thead><tr><th>Point de vente</th><th>Montant</th><th>Mode</th><th>Encaissé par</th><th>Master</th><th>Date</th></tr></thead>'+
+        '<tbody>'+rows+'</tbody>'+
+      '</table></div></div>';
   }
 
   function renderRecharges(){
@@ -1540,7 +1579,9 @@
       if(!ok) return; b.disabled=true; b.textContent='…';
       try{
         await api('/commercial/recharges/'+b.dataset.collect+'/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-        S.collections=await api('/commercial/collections'); renderView();
+        S.collections=await api('/commercial/collections');
+        try{ S.recouvHistory=await api('/commercial/history'); }catch(e){}
+        renderView();
         dlgSuccess('Encaissement enregistré','Le règlement a été enregistré et le fonds du Master a été crédité.');
       }catch(err){ b.disabled=false; b.textContent='Encaisser'; dlgError('Erreur', err.message); }
     }));
