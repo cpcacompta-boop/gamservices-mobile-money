@@ -633,14 +633,15 @@
     zones:'<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>',
     recharges:'<circle cx="12" cy="12" r="9"/><path d="M9.5 15.2c.4.9 1.3 1.5 2.5 1.5 1.6 0 2.6-.9 2.6-2 0-1.3-1.1-1.8-2.6-2.2-1.5-.4-2.6-.9-2.6-2.2 0-1.1 1-2 2.6-2 1.2 0 2.1.6 2.5 1.5"/><path d="M12 6.5v11"/>',
     fonds:'<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/>',
-    recouvrement:'<path d="M21 12V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9"/><path d="M3 10h18"/><path d="M16.5 17.5l2 2 3.5-3.5"/>'
+    recouvrement:'<path d="M21 12V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9"/><path d="M3 10h18"/><path d="M16.5 17.5l2 2 3.5-3.5"/>',
+    caisse:'<path d="M4 9h16l-1 10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/><circle cx="12" cy="14" r="1.6"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'},{id:'recouvrement',label:'Recouvrement'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges'], COMMERCIAL:['dashboard','recouvrement'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges','caisse'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -652,7 +653,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -677,8 +678,16 @@
     if(v==='recouvrement' && S.auth.user.role==='COMMERCIAL'){
       try{ S.recouvHistory=await api('/commercial/history'); }catch(e){ S.recouvHistory=S.recouvHistory||{items:[],stats:{}}; }
     }
+    if(v==='caisse' && S.auth.user.role==='COMMERCIAL'){
+      const d=S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'';
+      try{ S.commCaisse=await api('/commercial/caisse'+d); }catch(e){ S.commCaisse=S.commCaisse||null; }
+    }
+    if(v==='caisse' && S.auth.user.role==='MASTER'){
+      const d=S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'';
+      try{ S.masterCaisse=await api('/master/caisse'+d); }catch(e){ S.masterCaisse=S.masterCaisse||null; }
+    }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -828,6 +837,105 @@
       </div>`;
     return header+search+detail+allCredits;
   }
+  /* ---------- MA CAISSE (arrêté de caisse : commercial & master) ---------- */
+  function renderCaisse(){ return S.auth.user.role==='MASTER' ? renderCaisseMaster() : renderCaisseCommercial(); }
+
+  function caisseDateFilterHtml(current){
+    return '<div class="panel"><div style="padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+      '<label style="font-size:11px;color:var(--ink-soft);font-weight:700">Jour :</label>'+
+      '<input type="date" data-caisse-date value="'+esc(current||'')+'" style="max-width:170px">'+
+      '<button class="btn small" data-caisse-today type="button">Aujourd\'hui</button>'+
+    '</div></div>';
+  }
+  function caisseEcartLine(label,d){
+    if(d===0) return '<div style="color:var(--pos);font-size:12px;font-weight:700;padding:3px 0">✔ '+label+' : ta caisse tombe parfaitement.</div>';
+    const sign=d>0?'+':''; const col=d>0?'var(--warn)':'var(--red)';
+    const msg=d>0?'excédent (tu as plus que le système)':'manquant (il manque du '+label+')';
+    return '<div style="color:'+col+';font-size:12px;font-weight:700;padding:3px 0">⚠ '+label+' : écart de '+sign+fmtFcfa(d)+' — '+msg+'.</div>';
+  }
+
+  function renderCaisseCommercial(){
+    const c=S.commCaisse;
+    if(!c || !c.zone){
+      return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;line-height:1.6;text-align:center">Tu n\'es rattaché à aucune zone.<br>Demande au superviseur de t\'affecter à une zone.</div></div>';
+    }
+    const t=c.totals||{};
+    const header=`<div class="welcome"><h2>Ma caisse — ${esc(c.zone.nom)} 💼</h2><p>Ton point : ce que tu as encaissé, ce que tu as encore en main, et ce que tu as versé aux Masters.</p></div>
+      <div class="stat-row">
+        <div class="stat gold"><div class="lbl">Encaissé (total)</div><div class="num">${fmtFcfa(t.encaisse)}</div></div>
+        <div class="stat red"><div class="lbl">En main (à reverser)</div><div class="num">${fmtFcfa(t.en_main)}</div></div>
+        <div class="stat"><div class="lbl">En transit (à confirmer)</div><div class="num">${fmtFcfa(t.en_transit)}</div></div>
+        <div class="stat"><div class="lbl">Versé (confirmé)</div><div class="num">${fmtFcfa(t.verse)}</div></div>
+      </div>`;
+    const enMain=c.en_main||[];
+    const mainRows=enMain.length?enMain.map(function(r){
+      const master=[r.master_nom,r.master_prenoms].filter(Boolean).join(' ')||r.master_username;
+      return '<tr><td>'+esc(master)+'</td><td><b>'+fmtFcfa(r.montant)+'</b> FCFA</td><td>'+r.nb+' recharge(s)</td>'+
+        '<td><button class="btn small" data-verser="'+r.master_id+'" data-amount="'+esc(fmtFcfa(r.montant))+'" data-master="'+esc(master)+'">Verser à ce Master</button></td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="4">Rien en main — tu es à jour ✔</td></tr>';
+    const mainPanel='<div class="panel"><div class="panel-head"><h3>À reverser aux Masters</h3><span class="hint">L\'argent encaissé que tu dois remettre</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Master</th><th>Montant</th><th>Détail</th><th>Action</th></tr></thead><tbody>'+mainRows+'</tbody></table></div></div>';
+    const trans=c.en_transit||[];
+    const transPanel=trans.length?('<div class="panel"><div class="panel-head"><h3>En attente de confirmation</h3><span class="hint">Versements déclarés, à confirmer par le Master</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Master</th><th>Montant</th><th>Déclaré</th><th>Statut</th></tr></thead><tbody>'+
+      trans.map(function(v){ const master=[v.master_nom,v.master_prenoms].filter(Boolean).join(' ')||v.master_username;
+        return '<tr><td>'+esc(master)+'</td><td><b>'+fmtFcfa(v.montant)+'</b> FCFA</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(v.created_at)+'</td><td><span class="pill" style="background:var(--warn-soft);color:var(--warn)">En attente</span></td></tr>';
+      }).join('')+'</tbody></table></div></div>'):'';
+    const j=c.jour||{}; const ecart=Number(j.encaisse||0)-Number(j.verse||0);
+    const jourPanel=caisseDateFilterHtml(j.date)+
+      '<div class="panel"><div class="panel-head"><h3>Point du '+esc(j.date||'')+'</h3><span class="hint">Encaissé vs versé ce jour</span></div>'+
+      '<div class="table-wrap"><table><tbody>'+
+        '<tr><td>Encaissé chez les PDV</td><td style="text-align:right"><b>'+fmtFcfa(j.encaisse)+'</b> FCFA</td></tr>'+
+        '<tr><td>Versé au(x) Master(s)</td><td style="text-align:right"><b>'+fmtFcfa(j.verse)+'</b> FCFA</td></tr>'+
+        '<tr><td><b>Écart (encore en main)</b></td><td style="text-align:right"><b style="color:'+(ecart===0?'var(--pos)':'var(--warn)')+'">'+fmtFcfa(ecart)+'</b> FCFA</td></tr>'+
+      '</tbody></table></div>'+
+      (ecart===0?'<div style="padding:12px 20px;color:var(--pos);font-size:11px;font-weight:700">✔ Tout ce que tu as encaissé ce jour a été versé.</div>':'<div style="padding:12px 20px;color:var(--warn);font-size:11px;font-weight:700">⏳ Il reste '+fmtFcfa(ecart)+' FCFA encaissés ce jour, pas encore versés.</div>')+
+      '</div>';
+    const vs=c.versements||[];
+    const vRows=vs.length?vs.map(function(v){ const master=[v.master_nom,v.master_prenoms].filter(Boolean).join(' ')||v.master_username;
+      const tag=v.statut==='CONFIRME'?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Confirmé</span>':'<span class="pill" style="background:var(--red-soft);color:var(--red)">Rejeté</span>';
+      return '<tr><td>'+esc(master)+'</td><td><b>'+fmtFcfa(v.montant)+'</b> FCFA</td><td>'+tag+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(v.confirmed_at||v.created_at)+'</td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="4">Aucun versement</td></tr>';
+    const vPanel='<div class="panel"><div class="panel-head"><h3>Historique des versements</h3></div><div class="table-wrap"><table><thead><tr><th>Master</th><th>Montant</th><th>Statut</th><th>Date</th></tr></thead><tbody>'+vRows+'</tbody></table></div></div>';
+    return header+mainPanel+transPanel+jourPanel+vPanel;
+  }
+
+  function renderCaisseMaster(){
+    const c=S.masterCaisse;
+    if(!c){ return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;text-align:center">Chargement…</div></div>'; }
+    const pending=c.pending||[];
+    const header=`<div class="welcome"><h2>Ma caisse 💼</h2><p>Confirme les versements des commerciaux et vérifie que ta caisse tombe avec le système.</p></div>`;
+    const pendPanel='<div class="panel"><div class="panel-head"><h3>Versements à confirmer</h3><span class="hint">Confirme uniquement l\'argent réellement reçu</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Montant</th><th>Déclaré</th><th>Action</th></tr></thead><tbody>'+
+      (pending.length?pending.map(function(v){ const com=[v.commercial_nom,v.commercial_prenoms].filter(Boolean).join(' ')||v.commercial_username;
+        return '<tr><td>'+esc(com)+'</td><td><b>'+fmtFcfa(v.montant)+'</b> FCFA</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(v.created_at)+'</td>'+
+          '<td style="white-space:nowrap"><button class="btn small" data-confirm-versement="'+v.id+'" data-amount="'+esc(fmtFcfa(v.montant))+'" data-com="'+esc(com)+'">Confirmer</button> '+
+          '<button class="btn small" style="background:var(--red-soft);color:var(--red)" data-reject-versement="'+v.id+'" data-amount="'+esc(fmtFcfa(v.montant))+'" data-com="'+esc(com)+'">Rejeter</button></td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="4">Aucun versement en attente ✔</td></tr>')+
+      '</tbody></table></div></div>';
+    const j=c.jour||{};
+    const jourPanel=caisseDateFilterHtml(j.date)+
+      '<div class="panel"><div class="panel-head"><h3>Encaissé le '+esc(j.date||'')+'</h3><span class="hint">Ce qui est rentré dans ta caisse ce jour</span></div>'+
+      '<div class="stat-row" style="padding:14px 16px">'+
+        '<div class="stat"><div class="lbl">FCFA — paiements directs</div><div class="num">'+fmtFcfa(j.fcfa_direct)+'</div></div>'+
+        '<div class="stat"><div class="lbl">FCFA — reçu des commerciaux</div><div class="num">'+fmtFcfa(j.fcfa_verse)+'</div></div>'+
+        '<div class="stat gold"><div class="lbl">FCFA total encaissé</div><div class="num">'+fmtFcfa(j.fcfa_total)+'</div></div>'+
+        '<div class="stat"><div class="lbl">UV (retours)</div><div class="num">'+fmtFcfa(j.uv)+'</div></div>'+
+      '</div></div>';
+    const solde=c.solde||{solde_uv:0,solde_fcfa:0};
+    const controlPanel='<div class="panel"><div class="panel-head"><h3>Contrôle — est-ce que ça tombe ?</h3><span class="hint">Compte ton cash et ton UV réels, compare au système</span></div>'+
+      '<div class="form-grid" style="padding:16px 20px">'+
+        '<div class="field"><label>Système — Fonds UV</label><input value="'+fmtFcfa(solde.solde_uv)+'" readonly></div>'+
+        '<div class="field"><label>Réel — UV compté</label><input type="number" inputmode="numeric" data-check-uv placeholder="ton UV réel"></div>'+
+        '<div class="field"><label>Système — Fonds FCFA</label><input value="'+fmtFcfa(solde.solde_fcfa)+'" readonly></div>'+
+        '<div class="field"><label>Réel — FCFA compté</label><input type="number" inputmode="numeric" data-check-fcfa placeholder="ton cash réel"></div>'+
+      '</div>'+
+      '<div style="padding:0 20px 16px"><button class="btn small" data-check-caisse type="button">Vérifier</button></div>'+
+      '<div data-check-result style="padding:0 20px 18px"></div>'+
+    '</div>';
+    return header+pendPanel+jourPanel+controlPanel;
+  }
+
   /* ---------- COMMERCIAL : recouvrement du cash chez les PDV de sa zone ---------- */
   function renderRecouvrement(){
     const data=S.collections||{zone:null,pdvs:[]};
@@ -1585,6 +1693,54 @@
         dlgSuccess('Encaissement enregistré','Le règlement a été enregistré et le fonds du Master a été crédité.');
       }catch(err){ b.disabled=false; b.textContent='Encaisser'; dlgError('Erreur', err.message); }
     }));
+    // ---- Ma caisse (Commercial) : verser à un Master ----
+    document.querySelectorAll('[data-verser]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Verser au Master ?','Tu confirmes remettre '+b.dataset.amount+' FCFA à '+b.dataset.master+' ?\n\nLe Master devra confirmer la réception.',{type:'success',okText:'Oui, je verse'});
+      if(!ok) return; b.disabled=true; b.textContent='…';
+      try{
+        await api('/commercial/versements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({master_id:Number(b.dataset.verser)})});
+        S.commCaisse=await api('/commercial/caisse'+(S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'')); renderView();
+        dlgSuccess('Versement déclaré','Le Master a été notifié. En attente de sa confirmation.');
+      }catch(err){ b.disabled=false; b.textContent='Verser à ce Master'; dlgError('Erreur',err.message); }
+    }));
+    // ---- Ma caisse (Master) : confirmer / rejeter un versement ----
+    document.querySelectorAll('[data-confirm-versement]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Confirmer la réception ?','Tu confirmes avoir reçu '+b.dataset.amount+' FCFA de '+b.dataset.com+' ?\n\nTon fonds FCFA sera crédité.',{type:'success',okText:'Oui, j\'ai reçu'});
+      if(!ok) return; b.disabled=true; b.textContent='…';
+      try{
+        await api('/master/versements/'+b.dataset.confirmVersement+'/confirm',{method:'POST'});
+        S.masterCaisse=await api('/master/caisse'+(S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'')); renderView();
+        dlgSuccess('Versement confirmé','Ton fonds FCFA a été crédité.');
+      }catch(err){ b.disabled=false; b.textContent='Confirmer'; dlgError('Erreur',err.message); }
+    }));
+    document.querySelectorAll('[data-reject-versement]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Rejeter ce versement ?','Tu déclares NE PAS avoir reçu '+b.dataset.amount+' FCFA de '+b.dataset.com+'.\n\nL\'argent repassera « en main » du commercial.',{type:'danger',okText:'Rejeter'});
+      if(!ok) return; b.disabled=true; b.textContent='…';
+      try{
+        await api('/master/versements/'+b.dataset.rejectVersement+'/reject',{method:'POST'});
+        S.masterCaisse=await api('/master/caisse'+(S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'')); renderView();
+        dlgSuccess('Versement rejeté','Le commercial a été notifié, l\'argent est de nouveau en main.');
+      }catch(err){ b.disabled=false; b.textContent='Rejeter'; dlgError('Erreur',err.message); }
+    }));
+    // ---- Ma caisse : filtre par date ----
+    const dInput=document.querySelector('[data-caisse-date]');
+    if(dInput) dInput.addEventListener('change', ()=>{ S.caisseDate=dInput.value||null; loadView('caisse').then(renderView); });
+    const dToday=document.querySelector('[data-caisse-today]');
+    if(dToday) dToday.addEventListener('click', ()=>{ S.caisseDate=null; loadView('caisse').then(renderView); });
+    // ---- Ma caisse (Master) : contrôle "est-ce que ça tombe ?" ----
+    const cc=document.querySelector('[data-check-caisse]');
+    if(cc) cc.addEventListener('click', ()=>{
+      const solde=(S.masterCaisse&&S.masterCaisse.solde)||{solde_uv:0,solde_fcfa:0};
+      const uvR=document.querySelector('[data-check-uv]'), fcR=document.querySelector('[data-check-fcfa]');
+      const box=document.querySelector('[data-check-result]'); if(!box) return;
+      const uvReel=(uvR&&uvR.value!=='')?Number(uvR.value):null;
+      const fcReel=(fcR&&fcR.value!=='')?Number(fcR.value):null;
+      if(uvReel===null && fcReel===null){ box.innerHTML='<span style="color:var(--ink-soft);font-size:11px">Saisis au moins un montant réel.</span>'; return; }
+      let out='';
+      if(uvReel!==null) out+=caisseEcartLine('UV', uvReel-Number(solde.solde_uv));
+      if(fcReel!==null) out+=caisseEcartLine('FCFA', fcReel-Number(solde.solde_fcfa));
+      box.innerHTML=out;
+    });
     // ---- Fonds Masters (Superviseur) : recherche + sélection, aucun chargement de liste complète ----
     if(S.view==='fonds'){
       wireFondsSearch();
@@ -1743,12 +1899,22 @@
         S.masterFund=d.fund;
         dlgError('Retrait effectué', 'Le superviseur a retiré de ton fonds : −'+fmtUv(d.uv)+' UV, −'+fmtFcfa(d.fcfa)+' FCFA.');
         if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
-      } else if(d.type==='recharge_collected'){
-        // Un commercial vient d'encaisser du cash chez un PDV -> le fonds FCFA du Master monte
+      } else if(d.type==='collected_pending_remit'){
+        // Info : un commercial a encaissé chez un PDV. Le fonds ne bouge pas encore (versement à venir).
+        vibrate([50,30,50]);
+        dlgSuccess('Encaissement terrain', 'Le commercial '+(d.commercial||'')+' a encaissé '+fmtFcfa(d.montant)+' FCFA chez un de tes PDV. Tu le confirmeras à son versement.');
+      } else if(d.type==='versement_pending'){
         vibrate([60,40,60]);
-        S.masterFund=d.fund;
-        dlgSuccess('Encaissement reçu', 'Le commercial '+(d.commercial||'')+' a encaissé '+fmtFcfa(d.montant)+' FCFA chez un PDV de sa zone. Ton fonds FCFA a été crédité.');
-        if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
+        dlgSuccess('Versement à confirmer', (d.commercial||'Un commercial')+' déclare te verser '+fmtFcfa(d.montant)+' FCFA. Va dans « Ma caisse » pour confirmer la réception.');
+        if(S.view==='caisse') loadView('caisse').then(renderView);
+      } else if(d.type==='versement_confirmed'){
+        vibrate([60,40,60]);
+        dlgSuccess('Versement confirmé', 'Le Master a confirmé la réception de '+fmtFcfa(d.montant)+' FCFA. 👍');
+        if(S.view==='caisse') loadView('caisse').then(renderView);
+      } else if(d.type==='versement_rejected'){
+        vibrate([80,40,80]);
+        dlgError('Versement rejeté', 'Le Master déclare ne pas avoir reçu '+fmtFcfa(d.montant)+' FCFA. Le montant est de nouveau en main — rapproche-toi de lui.');
+        if(S.view==='caisse') loadView('caisse').then(renderView);
       } else if(d.type==='recharge_alert'){
         // Recharge restée en attente depuis un jour précédent — alerte, elle reste "en attente"
         vibrate([100,60,100,60,100]);
