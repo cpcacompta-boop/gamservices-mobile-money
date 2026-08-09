@@ -496,6 +496,38 @@
   const dlgSuccess=(title,message,opts)=>dlgAlert(title,message,Object.assign({type:'success'},opts));
   const dlgError=(title,message,opts)=>dlgAlert(title,message,Object.assign({type:'danger'},opts));
 
+  /* ---------- CHOIX DU MODE DE RÈGLEMENT (Espèces FCFA / Retour UV) ----------
+     Résout 'FCFA', 'UV' ou null (annulé). Réutilise le style des dialogues. */
+  function askPaymentMode(opts){
+    opts=opts||{};
+    const title=opts.title||'Comment le PDV règle-t-il ?';
+    const message=opts.message||'Choisis ce que le point de vente te remet pour régler cette recharge.';
+    return new Promise(resolve=>{
+      const ov=$('dlg-overlay');
+      ov.innerHTML=
+        '<div class="dlg-box dlg-type-info" role="alertdialog" aria-modal="true" aria-labelledby="dlg-title">'+
+          '<button class="dlg-x" data-mp-close type="button" aria-label="Fermer">&#10005;</button>'+
+          '<div class="dlg-icon info">'+DLG_ICONS.info+'</div>'+
+          '<h3 class="dlg-title" id="dlg-title">'+esc(title)+'</h3>'+
+          '<p class="dlg-msg">'+esc(message)+'</p>'+
+          '<div class="dlg-actions" style="flex-direction:column;gap:10px">'+
+            '<button class="dlg-ok info" data-mp="FCFA" type="button" style="width:100%">💵 En espèces (FCFA) — mon fonds FCFA augmente</button>'+
+            '<button class="dlg-ok warn" data-mp="UV" type="button" style="width:100%">🔁 En UV (retour) — mon fonds UV augmente</button>'+
+            '<button class="dlg-cancel" data-mp-cancel type="button" style="width:100%">Annuler</button>'+
+          '</div>'+
+        '</div>';
+      ov.classList.add('open'); document.body.classList.add('dlg-lock');
+      let closed=false, mpKey=null;
+      const close=(val)=>{ if(closed) return; closed=true; ov.classList.remove('open'); ov.innerHTML=''; document.body.classList.remove('dlg-lock'); if(mpKey){ document.removeEventListener('keydown',mpKey); mpKey=null; } resolve(val); };
+      ov.querySelectorAll('[data-mp]').forEach(btn=>btn.addEventListener('click',()=>close(btn.dataset.mp)));
+      const cx=ov.querySelector('[data-mp-cancel]'); if(cx) cx.addEventListener('click',()=>close(null));
+      const xc=ov.querySelector('[data-mp-close]'); if(xc) xc.addEventListener('click',()=>close(null));
+      ov.addEventListener('mousedown', e=>{ if(e.target===ov) close(null); }, { once:true });
+      mpKey=(e)=>{ if(e.key==='Escape') close(null); };
+      document.addEventListener('keydown', mpKey);
+    });
+  }
+
   function roleLabel(r){ return {SUPERVISEUR:'Superviseur',MASTER:'Master',COMMERCIAL:'Commercial',PDV:'Point de vente'}[r]||r; }
   function rolePill(r){ const c={SUPERVISEUR:'sup',MASTER:'master',COMMERCIAL:'com',PDV:'pdv'}[r]||'com'; return '<span class="pill '+c+'">'+roleLabel(r)+'</span>'; }
   function initials(s){ s=(s||'?').trim(); const p=s.split(/\s+/); return ((p[0]||'?')[0]+(p[1]||'')[0]||'').toUpperCase().slice(0,2)||s.slice(0,2).toUpperCase(); }
@@ -812,6 +844,13 @@
             <div class="field span2" style="flex-direction:row;align-items:center;gap:8px;display:flex">
               <input type="checkbox" name="paid_now" id="paid_now" style="width:auto">
               <label for="paid_now" style="margin:0" data-rc-paid-label>Le PDV a déjà payé (encaissement immédiat)</label>
+            </div>
+            <div class="field span2" data-rc-mode-wrap style="display:none">
+              <label>Le PDV règle en…</label>
+              <select name="mode_paiement" data-rc-mode>
+                <option value="FCFA">💵 Espèces (FCFA) — mon fonds FCFA augmente</option>
+                <option value="UV">🔁 UV (retour) — mon fonds UV augmente</option>
+              </select>
             </div>
           </div>
           <div style="padding:0 0 6px;color:var(--ink-soft);font-size:11px" data-rc-hint>Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée — même jour ou plus tard.</div>
@@ -1349,6 +1388,10 @@
           : "Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée — même jour ou plus tard.";
       }
       if(typeIn){ typeIn.addEventListener('change', applyType); applyType(); }
+      // Le sélecteur de mode (espèces / UV) n'apparaît que si le PDV a déjà payé
+      const paidChk=rf.querySelector('#paid_now'), modeWrap=rf.querySelector('[data-rc-mode-wrap]');
+      function applyPaid(){ if(modeWrap) modeWrap.style.display=(paidChk && paidChk.checked)?'':'none'; }
+      if(paidChk){ paidChk.addEventListener('change', applyPaid); applyPaid(); }
       rf.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const msg=rf.querySelector('[data-msg]'); msg.textContent='Enregistrement…'; msg.className='msg';
@@ -1362,9 +1405,15 @@
       });
     }
     document.querySelectorAll('[data-payrecharge]').forEach(b=>b.addEventListener('click', async ()=>{
-      const ok=await dlgConfirm('Marquer cette recharge comme payée ?','Le montant en FCFA sera ajouté à ton fonds encaissé.',{type:'success',okText:'Confirmer le paiement'});
-      if(!ok) return; b.disabled=true; b.textContent='…';
-      try{ await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST'}); await loadMasterData(); renderView(); }
+      const mode=await askPaymentMode();
+      if(!mode) return; b.disabled=true; b.textContent='…';
+      try{
+        await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode_paiement:mode})});
+        await loadMasterData(); renderView();
+        dlgSuccess('Règlement enregistré', mode==='UV'
+          ? 'Le PDV a rendu de l\'UV : ton fonds UV a été augmenté du montant.'
+          : 'Le PDV a payé en espèces : ton fonds FCFA a été augmenté du montant.');
+      }
       catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
     }));
     const retf=document.querySelector('form[data-form-return]');
@@ -1588,7 +1637,10 @@
     return d.getFullYear()!==now.getFullYear() || d.getMonth()!==now.getMonth() || d.getDate()!==now.getDate();
   }
   function statutBadge(rc){
-    if(rc.statut==='PAYE') return '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Payé</span>';
+    if(rc.statut==='PAYE'){
+      var mode = rc.mode_paiement==='UV' ? ' · UV' : (rc.mode_paiement==='FCFA' ? ' · FCFA' : '');
+      return '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Payé'+esc(mode)+'</span>';
+    }
     if(isOverdue(rc)) return '<span class="pill" style="background:var(--red-soft);color:var(--red)">En retard</span>';
     return '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">En attente</span>';
   }
