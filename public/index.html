@@ -632,14 +632,15 @@
     equipe:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
     zones:'<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>',
     recharges:'<circle cx="12" cy="12" r="9"/><path d="M9.5 15.2c.4.9 1.3 1.5 2.5 1.5 1.6 0 2.6-.9 2.6-2 0-1.3-1.1-1.8-2.6-2.2-1.5-.4-2.6-.9-2.6-2.2 0-1.1 1-2 2.6-2 1.2 0 2.1.6 2.5 1.5"/><path d="M12 6.5v11"/>',
-    fonds:'<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/>'
+    fonds:'<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/>',
+    recouvrement:'<path d="M21 12V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9"/><path d="M3 10h18"/><path d="M16.5 17.5l2 2 3.5-3.5"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'},{id:'recouvrement',label:'Recouvrement'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges'], COMMERCIAL:['dashboard'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges'], COMMERCIAL:['dashboard','recouvrement'], PDV:['dashboard'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -651,7 +652,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -670,8 +671,11 @@
       if(S.fondsSelectedId){ try{ S.fondsSelectedDetail=await api('/masters/'+S.fondsSelectedId+'/summary'); }catch(e){ S.fondsSelectedId=null; S.fondsSelectedDetail=null; } }
     }
     if((v==='recharges' || v==='dashboard') && S.auth.user.role==='MASTER'){ await loadMasterData(); }
+    if((v==='recouvrement' || v==='dashboard') && S.auth.user.role==='COMMERCIAL'){
+      try{ S.collections=await api('/commercial/collections'); }catch(e){ S.collections=S.collections||{zone:null,pdvs:[]}; }
+    }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -717,6 +721,27 @@
         ${renderRechargeTable(recent, false)}
         <div style="padding:16px 20px"><button class="btn small" data-goto="recharges">+ Nouvelle recharge</button></div>
       </div>`;
+    } else if(u.role==='COMMERCIAL'){
+      const data=S.collections||{zone:null,pdvs:[]};
+      const pdvs=data.pdvs||[];
+      const total=pdvs.reduce((s,p)=>s+Number(p.total_attente||0),0);
+      if(!data.zone){
+        cards=`<div class="panel"><div class="panel-head"><h3>Ta zone</h3></div>
+          <div style="padding:20px;color:var(--ink-soft);font-size:11px;line-height:1.6">Tu n'es rattaché à aucune zone pour l'instant. Le superviseur doit t'affecter comme <b>responsable</b> (ou suppléant) d'une zone pour que tu puisses faire le recouvrement chez les PDV.</div></div>`;
+      } else {
+        cards=`<div class="stat-row">
+          <div class="stat"><div class="lbl">Ta zone</div><div class="num">${esc(data.zone.nom)}</div></div>
+          <div class="stat red"><div class="lbl">PDV à recouvrer</div><div class="num">${pdvs.length}</div></div>
+          <div class="stat gold"><div class="lbl">Total à récupérer (FCFA)</div><div class="num">${fmtFcfa(total)}</div></div>
+        </div>
+        <div class="panel"><div class="panel-head"><h3>Recouvrement</h3><span class="hint">Le cash en attente chez les PDV de ta zone</span></div>
+          <div style="padding:20px;color:var(--ink-soft);font-size:11px;line-height:1.6">${pdvs.length
+            ? 'Tu as <b>'+pdvs.length+'</b> point(s) de vente avec du cash à récupérer, pour un total de <b>'+fmtFcfa(total)+' FCFA</b>. Passe les encaisser un par un.'
+            : 'Aucun PDV à recouvrer pour le moment — tout est à jour. ✔'}
+            <div style="margin-top:14px"><button class="btn small" data-goto="recouvrement">Ouvrir le recouvrement</button></div>
+          </div>
+        </div>`;
+      }
     } else {
       cards=`<div class="panel"><div class="panel-head"><h3>Ton espace</h3></div>
         <div style="padding:20px;color:var(--ink-soft);font-size:11px;line-height:1.6">Ton espace <b>${esc(roleLabel(u.role))}</b> est prêt. Les fonctionnalités arrivent bientôt.</div></div>`;
@@ -800,6 +825,53 @@
       </div>`;
     return header+search+detail+allCredits;
   }
+  /* ---------- COMMERCIAL : recouvrement du cash chez les PDV de sa zone ---------- */
+  function renderRecouvrement(){
+    const data=S.collections||{zone:null,pdvs:[]};
+    if(!data.zone){
+      return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;line-height:1.6;text-align:center">Tu n\'es rattaché à aucune zone pour le moment.<br>Demande au superviseur de t\'affecter comme responsable (ou suppléant) d\'une zone.</div></div>';
+    }
+    const pdvs=data.pdvs||[];
+    const totalGlobal=pdvs.reduce((s,p)=>s+Number(p.total_attente||0),0);
+    const header=`<div class="welcome"><h2>Recouvrement — ${esc(data.zone.nom)} 🗺️</h2><p>Passe encaisser le cash (FCFA) en attente chez les PDV de ta zone, un point de vente à la fois.</p></div>
+      <div class="stat-row">
+        <div class="stat red"><div class="lbl">PDV à recouvrer</div><div class="num">${pdvs.length}</div></div>
+        <div class="stat gold"><div class="lbl">Total à récupérer (FCFA)</div><div class="num">${fmtFcfa(totalGlobal)}</div></div>
+      </div>`;
+    if(!pdvs.length){
+      return header+'<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)"><div style="padding:22px;color:var(--pos);font-size:12px;font-weight:700;text-align:center">✔ Rien à recouvrer dans ta zone — tous les PDV sont à jour.</div></div>';
+    }
+    const cards=pdvs.map(function(p){
+      const nm=p.nom_commercial||p.username;
+      const loc=[p.quartier,p.ville].filter(Boolean).join(' · ');
+      const contact=p.contact_gerant||p.contact_responsable||'';
+      const gerant=p.nom_gerant||p.nom_responsable||'';
+      const mapBtn=(p.lat!=null && p.lng!=null)
+        ? '<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+p.lat+','+p.lng+'">📍 Localiser sur la carte</a>'
+        : '';
+      const rows=(p.recharges||[]).map(function(rc){
+        const master=[rc.master_nom,rc.master_prenoms].filter(Boolean).join(' ')||rc.master_username;
+        return '<tr>'+
+          '<td><b>'+fmtFcfa(rc.montant_fcfa)+'</b> FCFA</td>'+
+          '<td>'+esc(master)+'</td>'+
+          '<td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(rc.created_at)+'</td>'+
+          '<td><button class="btn small" data-collect="'+rc.id+'" data-amount="'+esc(fmtFcfa(rc.montant_fcfa))+'" data-pdv="'+esc(nm)+'">Encaisser</button></td>'+
+        '</tr>';
+      }).join('');
+      return '<div class="panel">'+
+        '<div class="panel-head">'+
+          '<div style="min-width:0"><h3>'+esc(nm)+'</h3>'+((loc||gerant||contact)?'<span class="hint">'+esc([loc,gerant,contact].filter(Boolean).join(' · '))+'</span>':'')+'</div>'+
+          '<div style="text-align:right;white-space:nowrap"><div style="font-size:11px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;font-weight:700">À récupérer</div><div style="font-size:16px;font-weight:800;color:var(--gold)">'+fmtFcfa(p.total_attente)+' FCFA</div>'+(mapBtn?'<div style="margin-top:2px">'+mapBtn+'</div>':'')+'</div>'+
+        '</div>'+
+        '<div class="table-wrap"><table>'+
+          '<thead><tr><th>Montant</th><th>Rechargé par (Master)</th><th>Depuis</th><th>Action</th></tr></thead>'+
+          '<tbody>'+rows+'</tbody>'+
+        '</table></div>'+
+      '</div>';
+    }).join('');
+    return header+cards;
+  }
+
   function renderRecharges(){
     const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,total_retourne:0,fonds_total:0,en_circulation:0,manquant:0};
     const pdvs=S.pdvs||[];
@@ -986,13 +1058,15 @@
       '</div>';
     }
     if(role==='PDV'){
+      var zonesP=S.zones||[];
+      var zoneOptsP='<option value="">— choisir la zone —</option>'+zonesP.map(function(z){return '<option value="'+z.id+'">'+esc(z.nom)+'</option>';}).join('');
       return '<div class="form-grid">'+
         photoField('photo','Photo (du gérant)')+
         '<div class="field"><label>Identifiant (ID)</label><input name="username" required placeholder="ex : PDV-001"></div>'+
         '<div class="field"><label>Nom commercial (entreprise)</label><input name="nom_commercial" placeholder="ex : Boutique Chez Awa"></div>'+
         '<div class="field"><label>Ville</label><input name="ville" placeholder="ex : Abidjan"></div>'+
-        '<div class="field"><label>Quartier</label><input name="quartier" placeholder="ex : Cocody"></div>'+
-        '<div class="field"><label>Zone</label><input name="zone" placeholder="ex : Zone Nord"></div>'+
+        '<div class="field"><label>Zone</label><select name="zone_id" data-pdv-zone>'+zoneOptsP+'</select></div>'+
+        '<div class="field"><label>Quartier</label><select name="quartier" data-pdv-quartier data-current=""><option value="">— choisir d\'abord la zone —</option></select></div>'+
         '<div class="field span2"><label>Situation géographique</label><input name="situation_geo" placeholder="ex : face au marché, près de la pharmacie"></div>'+
         '<div class="field"><label>Nom du responsable</label><input name="nom_responsable" placeholder="ex : Awa Traoré"></div>'+
         '<div class="field"><label>Contact du responsable</label><input name="contact_responsable" placeholder="ex : 07 00 00 00 00"></div>'+
@@ -1045,6 +1119,18 @@
       const f=ev.target.files&&ev.target.files[0]; if(!f) return; const field=inp.dataset.photo;
       compressImage(f, b64=>{ PHOTOS[field]=b64; const box=uf.querySelector('[data-slot="'+field+'"]'); if(box){ box.textContent=''; box.style.backgroundImage='url('+b64+')'; } });
     }));
+    // PDV : le menu Quartier se remplit avec les quartiers de la zone choisie (dépendance solide)
+    const zoneSel=uf.querySelector('[data-pdv-zone]'), quartierSel=uf.querySelector('[data-pdv-quartier]');
+    if(zoneSel && quartierSel){
+      const current=quartierSel.getAttribute('data-current')||'';
+      const fillQuartiers=()=>{
+        const z=(S.zones||[]).find(function(x){return String(x.id)===String(zoneSel.value);});
+        const qs=z?String(z.quartiers||'').split(',').map(function(s){return s.trim();}).filter(Boolean):[];
+        quartierSel.innerHTML='<option value="">'+(z?'— choisir le quartier —':'— choisir d\'abord la zone —')+'</option>'+
+          qs.map(function(q){return '<option value="'+esc(q)+'"'+(q===current?' selected':'')+'>'+esc(q)+'</option>';}).join('');
+      };
+      zoneSel.addEventListener('change', fillQuartiers); fillQuartiers();
+    }
     const codeInp=uf.querySelector('[data-code]');
     if(codeInp){ let edited=!!codeInp.value; codeInp.addEventListener('input',()=>edited=true);
       const gen=()=>{ if(edited) return; const nom=(uf.querySelector('[name=nom]')||{}).value||''; const pre=(uf.querySelector('[name=prenoms]')||{}).value||'';
@@ -1067,11 +1153,13 @@
   function gpsLink(gps){ if(!gps) return '—'; const m=String(gps).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/); if(m) return '<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+m[1]+','+m[2]+'">'+esc(gps)+' — voir sur la carte</a>'; return esc(gps); }
   function editFields(u){ const v=(k)=>esc(u[k]||'');
     if(u.role==='PDV'){
+      var zonesE=S.zones||[];
+      var zoneOptsE='<option value="">— choisir la zone —</option>'+zonesE.map(function(z){return '<option value="'+z.id+'"'+(String(u.zone_id)===String(z.id)?' selected':'')+'>'+esc(z.nom)+'</option>';}).join('');
       return photoField('photo','Photo (du gérant)')+
         '<div class="field"><label>Nom commercial</label><input name="nom_commercial" value="'+v('nom_commercial')+'"></div>'+
         '<div class="field"><label>Ville</label><input name="ville" value="'+v('ville')+'"></div>'+
-        '<div class="field"><label>Quartier</label><input name="quartier" value="'+v('quartier')+'"></div>'+
-        '<div class="field"><label>Zone</label><input name="zone" value="'+v('zone')+'"></div>'+
+        '<div class="field"><label>Zone</label><select name="zone_id" data-pdv-zone>'+zoneOptsE+'</select></div>'+
+        '<div class="field"><label>Quartier</label><select name="quartier" data-pdv-quartier data-current="'+v('quartier')+'"><option value="">— choisir d\'abord la zone —</option></select></div>'+
         '<div class="field span2"><label>Situation géographique</label><input name="situation_geo" value="'+v('situation_geo')+'"></div>'+
         '<div class="field"><label>Nom du responsable</label><input name="nom_responsable" value="'+v('nom_responsable')+'"></div>'+
         '<div class="field"><label>Contact du responsable</label><input name="contact_responsable" value="'+v('contact_responsable')+'"></div>'+
@@ -1446,6 +1534,16 @@
         dlgSuccess('Retour enregistré', 'Le montant a été retiré de ton fonds avec succès.');
       }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
     }); }
+    // ---- Recouvrement (Commercial) : encaissement une recharge à la fois ----
+    document.querySelectorAll('[data-collect]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Confirmer l\'encaissement ?','Tu confirmes avoir reçu '+b.dataset.amount+' FCFA en espèces chez '+b.dataset.pdv+' ?\n\nLe fonds FCFA du Master sera crédité automatiquement.',{type:'success',okText:'Oui, j\'ai encaissé'});
+      if(!ok) return; b.disabled=true; b.textContent='…';
+      try{
+        await api('/commercial/recharges/'+b.dataset.collect+'/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+        S.collections=await api('/commercial/collections'); renderView();
+        dlgSuccess('Encaissement enregistré','Le règlement a été enregistré et le fonds du Master a été crédité.');
+      }catch(err){ b.disabled=false; b.textContent='Encaisser'; dlgError('Erreur', err.message); }
+    }));
     // ---- Fonds Masters (Superviseur) : recherche + sélection, aucun chargement de liste complète ----
     if(S.view==='fonds'){
       wireFondsSearch();
@@ -1603,6 +1701,12 @@
         vibrate([60,40,60]);
         S.masterFund=d.fund;
         dlgError('Retrait effectué', 'Le superviseur a retiré de ton fonds : −'+fmtUv(d.uv)+' UV, −'+fmtFcfa(d.fcfa)+' FCFA.');
+        if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
+      } else if(d.type==='recharge_collected'){
+        // Un commercial vient d'encaisser du cash chez un PDV -> le fonds FCFA du Master monte
+        vibrate([60,40,60]);
+        S.masterFund=d.fund;
+        dlgSuccess('Encaissement reçu', 'Le commercial '+(d.commercial||'')+' a encaissé '+fmtFcfa(d.montant)+' FCFA chez un PDV de sa zone. Ton fonds FCFA a été crédité.');
         if(S.view==='dashboard' || S.view==='recharges') loadView(S.view).then(renderView);
       } else if(d.type==='recharge_alert'){
         // Recharge restée en attente depuis un jour précédent — alerte, elle reste "en attente"
