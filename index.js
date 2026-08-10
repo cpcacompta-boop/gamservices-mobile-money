@@ -439,7 +439,8 @@ function computeFundBreakdown(row) {
 }
 
 // Le Master consulte son propre fonds (solde UV disponible, solde FCFA encaissé, fonds total)
-app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
+// Helper réutilisable : renvoie le fonds détaillé d'un Master (solde, crédité, retourné, en attente PDV/commercial, manquant)
+async function getMasterFund(masterId) {
   const r = await pool.query(`
     SELECT u.solde_uv, u.solde_fcfa,
       COALESCE((SELECT SUM(uv) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_uv,
@@ -449,9 +450,13 @@ app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
       COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND (statut='EN_ATTENTE' OR (statut='PAYE' AND remis=FALSE))), 0) AS en_attente_reel,
       COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE'), 0) AS en_attente_pdv,
       COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='PAYE' AND remis=FALSE), 0) AS en_attente_commercial
-    FROM users u WHERE u.id=$1`, [req.user.id]);
+    FROM users u WHERE u.id=$1`, [masterId]);
   const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite_uv: 0, total_credite_fcfa: 0, total_retourne_uv: 0, total_retourne_fcfa: 0, en_attente_reel: 0 };
-  res.json(computeFundBreakdown(row));
+  return computeFundBreakdown(row);
+}
+
+app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
+  res.json(await getMasterFund(req.user.id));
 }));
 
 // Liste des PDV disponibles pour une recharge (aucune restriction de zone/quartier)
@@ -803,9 +808,11 @@ app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
   const fcfaVerse = Number((await pool.query(
     "SELECT COALESCE(SUM(montant),0) s FROM versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
   const u = (await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [mid])).rows[0] || { solde_uv: 0, solde_fcfa: 0 };
+  const fund = await getMasterFund(mid);
   res.json({
     pending,
     solde: u,
+    fund,
     jour: { date: dateStr, fcfa_direct: fcfaDirect, fcfa_verse: fcfaVerse, fcfa_total: fcfaDirect + fcfaVerse, uv: uvJour }
   });
 }));
