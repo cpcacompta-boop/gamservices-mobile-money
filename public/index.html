@@ -82,15 +82,15 @@
 
   /* Sidebar */
   .sidebar{width:264px;flex-shrink:0;background:linear-gradient(180deg,var(--brand-deep-1),var(--brand-deep-2));color:#fff;display:flex;flex-direction:column;padding:20px 0 20px;position:sticky;top:0;height:100vh;}
-  .side-logo{padding:4px 22px 16px;border-bottom:1px solid rgba(200,155,60,.30);margin-bottom:6px;display:flex;justify-content:center;}
-  .side-logo img{width:170px;max-width:100%;filter:drop-shadow(0 4px 12px rgba(0,0,0,.3));}
+  .side-logo{padding:4px 22px 14px;border-bottom:1px solid rgba(200,155,60,.30);margin-bottom:6px;display:flex;justify-content:center;}
+  .side-logo img{width:130px;max-width:100%;filter:drop-shadow(0 4px 12px rgba(0,0,0,.3));}
   nav{display:flex;flex-direction:column;gap:6px;padding:10px 14px;overflow-y:auto;flex:1;}
   nav::-webkit-scrollbar{width:6px;} nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px;}
   .nav-group{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.40);padding:16px 8px 8px;display:flex;align-items:center;gap:9px;}
   .nav-group::after{content:"";flex:1;height:1px;background:rgba(255,255,255,.10);}
   nav button{all:unset;cursor:pointer;padding:7px 12px;border-radius:10px;position:relative;font-size:11px;font-weight:500;letter-spacing:.005em;line-height:1.3;color:rgba(255,255,255,.88);display:flex;align-items:center;gap:13px;transition:background .16s,color .16s;}
-  .ico-wrap{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:rgba(255,255,255,.09);transition:background .16s;}
-  nav button .ico{width:17px;height:17px;flex-shrink:0;stroke:#fff;opacity:.92;transition:opacity .16s;}
+  .ico-wrap{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:rgba(255,255,255,.09);transition:background .16s;}
+  nav button .ico{width:15px;height:15px;flex-shrink:0;stroke:#fff;opacity:.92;transition:opacity .16s;}
   nav button:hover{background:rgba(255,255,255,.07);color:#fff;}
   nav button:hover .ico-wrap{background:rgba(255,255,255,.16);}
   nav button.active{background:rgba(255,255,255,.10);color:#fff;font-weight:700;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}
@@ -1418,16 +1418,29 @@
         </div>
       </div>`;
     }
-    // 2) Aucun manquant mais de l'argent encore chez les PDV (recharges non réglées) -> EN ATTENTE (jaune)
-    if(enCirc>0){
+    // 2) Aucun manquant mais de l'argent encore "dehors" -> EN ATTENTE (jaune), avec le détail :
+    //    - chez les PDV (pas encore encaissé)
+    //    - déjà encaissé par un commercial, mais pas encore reversé au Master
+    const pdv=Number(fund.en_attente_pdv||0);
+    const com=Number(fund.en_attente_commercial||0);
+    if(pdv>0 || com>0){
+      const total=pdv+com;
+      let detail;
+      if(pdv>0 && com>0){
+        detail='Dont <b>'+fmtFcfa(pdv)+' FCFA</b> encore chez les PDV (pas encore encaissé), et <b>'+fmtFcfa(com)+' FCFA</b> déjà encaissé(s) par un commercial mais pas encore reversé(s) dans ta caisse.';
+      } else if(com>0){
+        detail='Ce montant a bien été <b>encaissé par un commercial</b> chez tes PDV, mais il n\'a pas encore été <b>reversé dans ta caisse</b>. Il rentrera dès que tu auras confirmé son versement.';
+      } else {
+        detail='Ce montant est encore <b>chez les PDV</b> (recharges pas encore réglées). Il rentrera dès qu\'ils auront payé, en espèces ou en UV.';
+      }
       return `<div class="panel" style="background:var(--warn-soft);border:1px solid var(--warn)">
         <div style="padding:14px 20px;color:var(--warn);font-size:12px;font-weight:700;line-height:1.9">
-          ⏳ En attente de règlement&nbsp;: <b>${fmtFcfa(enCirc)}</b> FCFA encore chez les PDV.<br>
-          <span style="font-weight:500">Aucun manquant détecté — cette somme rentrera dès que les PDV auront réglé (en espèces ou en UV).</span>
+          ⏳ En attente&nbsp;: <b>${fmtFcfa(total)}</b> FCFA — aucun manquant réel.<br>
+          <span style="font-weight:500">${detail}</span>
         </div>
       </div>`;
     }
-    // 3) Rien en circulation, rien de manquant -> TOUT RÉGLÉ (vert)
+    // 3) Rien dehors, rien de manquant -> TOUT RÉGLÉ (vert)
     return `<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)">
       <div style="padding:14px 20px;color:var(--pos);font-size:12px;font-weight:700">✔ Tout est en règle&nbsp;: Fonds UV + Fonds FCFA correspond au total crédité, aucun paiement en attente et aucun manque détecté.</div>
     </div>`;
