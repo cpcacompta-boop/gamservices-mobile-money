@@ -433,6 +433,8 @@ function computeFundBreakdown(row) {
   // montant_fcfa porte toujours ce montant, que la recharge soit de type UV ou FCFA.
   row.en_circulation = row.total_credite - row.total_retourne - row.fonds_total;
   row.manquant = Math.max(0, row.en_circulation - Number(row.en_attente_reel || 0));
+  row.en_attente_pdv = Number(row.en_attente_pdv || 0);
+  row.en_attente_commercial = Number(row.en_attente_commercial || 0);
   return row;
 }
 
@@ -444,7 +446,9 @@ app.get('/me/fund', requireRole('MASTER'), wrap(async (req, res) => {
       COALESCE((SELECT SUM(fcfa) FROM fund_credits WHERE master_id=u.id), 0) AS total_credite_fcfa,
       COALESCE((SELECT SUM(uv) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_uv,
       COALESCE((SELECT SUM(fcfa) FROM fund_returns WHERE master_id=u.id), 0) AS total_retourne_fcfa,
-      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND (statut='EN_ATTENTE' OR (statut='PAYE' AND remis=FALSE))), 0) AS en_attente_reel
+      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND (statut='EN_ATTENTE' OR (statut='PAYE' AND remis=FALSE))), 0) AS en_attente_reel,
+      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='EN_ATTENTE'), 0) AS en_attente_pdv,
+      COALESCE((SELECT SUM(montant_fcfa) FROM uv_recharges WHERE master_id=u.id AND statut='PAYE' AND remis=FALSE), 0) AS en_attente_commercial
     FROM users u WHERE u.id=$1`, [req.user.id]);
   const row = r.rows[0] || { solde_uv: 0, solde_fcfa: 0, total_credite_uv: 0, total_credite_fcfa: 0, total_retourne_uv: 0, total_retourne_fcfa: 0, en_attente_reel: 0 };
   res.json(computeFundBreakdown(row));
