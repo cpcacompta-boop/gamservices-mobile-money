@@ -217,7 +217,10 @@ async function ensureCaisseSchema() {
     "CREATE INDEX IF NOT EXISTS gam_versements_commercial ON gam_versements(commercial_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS gam_versements_master ON gam_versements(master_id, statut)",
     // Défensif : si une ancienne table "versements" bloque avec des colonnes NOT NULL, on lève le blocage
-    "ALTER TABLE versements ALTER COLUMN mode DROP NOT NULL"
+    "ALTER TABLE versements ALTER COLUMN mode DROP NOT NULL",
+    // Archives de clôture journalière (snapshot immuable du point du jour)
+    "CREATE TABLE IF NOT EXISTS gam_clotures (id SERIAL PRIMARY KEY, master_id INTEGER, date_jour DATE NOT NULL, snapshot JSONB NOT NULL, cloture_par INTEGER, created_at TIMESTAMPTZ DEFAULT now())",
+    "CREATE UNIQUE INDEX IF NOT EXISTS gam_clotures_unique ON gam_clotures(master_id, date_jour)"
   ];
   for (const s of stmts) {
     try { await pool.query(s); }
@@ -855,6 +858,104 @@ app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
     point: { commerciaux, non_pointes: nonPointes },
     jour: { date: dateStr, fcfa_direct: fcfaDirect, fcfa_verse: fcfaVerse, fcfa_total: fcfaDirect + fcfaVerse, uv: uvJour }
   });
+}));
+
+/* ---- POINTS & RAPPORTS : point du jour (3 niveaux) + clôture journalière figée ---- */
+
+// Construit le rapport complet d'un Master pour un jour donné (niveaux PDV, Commercial, Master)
+async function computeMasterReport(mid, masterUser, dateStr) {
+  const fund = await getMasterFund(mid);
+  const fcfaDirect = Number((await pool.query("SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND regle_par_role='MASTER' AND (mode_paiement IS NULL OR mode_paiement='FCFA') AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
+  const uvJour = Number((await pool.query("SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND mode_paiement='UV' AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
+  const fcfaVerse = Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
+
+  // Niveau 1 : point de chaque PDV (encaissé du jour + reste en attente)
+  const pdvs = (await pool.query(
+    `SELECT p.nom_commercial, p.username AS pdv_username,
+       COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND rc.paid_at::date=$2::date),0) AS encaisse_jour,
+       COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'),0) AS reste
+     FROM uv_recharges rc JOIN users p ON p.id=rc.pdv_id
+     WHERE rc.master_id=$1
+     GROUP BY p.id, p.nom_commercial, p.username
+     HAVING COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND rc.paid_at::date=$2::date),0) > 0
+         OR COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'),0) > 0
+     ORDER BY p.nom_commercial NULLS LAST`, [mid, dateStr])).rows
+    .map(r => ({ pdv: r.nom_commercial || r.pdv_username, encaisse_jour: Number(r.encaisse_jour), reste: Number(r.reste) }));
+
+  // Niveau 2 : point par commercial (fiche Master <-> Commercial)
+  const collected = (await pool.query(
+    `SELECT rc.regle_par AS commercial_id, cu.nom AS c_nom, cu.prenoms AS c_prenoms, cu.username AS c_username,
+            z.nom AS zone_nom, p.nom_commercial, p.username AS pdv_username, rc.montant_fcfa, rc.remis
+     FROM uv_recharges rc JOIN users p ON p.id=rc.pdv_id
+     LEFT JOIN users cu ON cu.id=rc.regle_par LEFT JOIN zones z ON z.id=p.zone_id
+     WHERE rc.master_id=$1 AND rc.statut='PAYE' AND rc.regle_par_role='COMMERCIAL' AND rc.paid_at::date=$2::date
+     ORDER BY cu.nom NULLS LAST, p.nom_commercial NULLS LAST`, [mid, dateStr])).rows;
+  const byCom = {};
+  for (const r of collected) {
+    const k = r.commercial_id || 0;
+    if (!byCom[k]) byCom[k] = { commercial_nom: [r.c_nom, r.c_prenoms].filter(Boolean).join(' ') || r.c_username || '—', zone_nom: r.zone_nom || '', pdvs: [], total: 0, total_remis: 0 };
+    const m = Number(r.montant_fcfa || 0);
+    byCom[k].pdvs.push({ pdv: r.nom_commercial || r.pdv_username, montant: m, remis: !!r.remis });
+    byCom[k].total += m; if (r.remis) byCom[k].total_remis += m;
+  }
+  const commerciaux = Object.values(byCom);
+
+  const nonPointes = (await pool.query(
+    `SELECT p.nom_commercial, p.username AS pdv_username, COALESCE(SUM(rc.montant_fcfa),0) AS montant
+     FROM uv_recharges rc JOIN users p ON p.id=rc.pdv_id
+     WHERE rc.master_id=$1 AND rc.statut='EN_ATTENTE'
+     GROUP BY p.nom_commercial, p.username HAVING COALESCE(SUM(rc.montant_fcfa),0)>0
+     ORDER BY p.nom_commercial NULLS LAST`, [mid])).rows
+    .map(n => ({ pdv: n.nom_commercial || n.pdv_username, montant: Number(n.montant) }));
+
+  return {
+    date: dateStr,
+    master: { nom: [masterUser.nom, masterUser.prenoms].filter(Boolean).join(' ') || masterUser.username },
+    fund,
+    pending_total: Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='EN_ATTENTE'", [mid])).rows[0].s),
+    jour: { date: dateStr, fcfa_direct: fcfaDirect, fcfa_verse: fcfaVerse, fcfa_total: fcfaDirect + fcfaVerse, uv: uvJour },
+    point: { pdvs, commerciaux, non_pointes: nonPointes }
+  };
+}
+
+// Aperçu / rapport d'un jour (figé si clôturé, sinon calculé en direct) + avertissements + archives
+app.get('/master/reports', requireRole('MASTER'), wrap(async (req, res) => {
+  const mid = req.user.id;
+  const dateStr = (req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)) ? req.query.date : new Date().toISOString().slice(0, 10);
+  const cl = await pool.query(
+    `SELECT c.snapshot, c.created_at, u.nom AS par_nom, u.prenoms AS par_prenoms, u.username AS par_username
+     FROM gam_clotures c LEFT JOIN users u ON u.id=c.cloture_par
+     WHERE c.master_id=$1 AND c.date_jour=$2::date`, [mid, dateStr]);
+  let report, closed = false, cloture_info = null;
+  if (cl.rows.length) {
+    closed = true;
+    const row = cl.rows[0];
+    report = typeof row.snapshot === 'string' ? JSON.parse(row.snapshot) : row.snapshot;
+    cloture_info = { created_at: row.created_at, par: [row.par_nom, row.par_prenoms].filter(Boolean).join(' ') || row.par_username || '—' };
+  } else {
+    report = await computeMasterReport(mid, req.user, dateStr);
+  }
+  const pend = await pool.query("SELECT COUNT(*)::int c, COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='EN_ATTENTE'", [mid]);
+  const np = (report.point && report.point.non_pointes) || [];
+  const warnings = { pending_count: pend.rows[0].c, pending_total: Number(pend.rows[0].s), non_pointes_count: np.length, non_pointes_total: np.reduce((s, n) => s + Number(n.montant || 0), 0) };
+  const arch = await pool.query('SELECT date_jour, snapshot, created_at FROM gam_clotures WHERE master_id=$1 ORDER BY date_jour DESC LIMIT 60', [mid]);
+  const archives = arch.rows.map(a => {
+    const s = typeof a.snapshot === 'string' ? JSON.parse(a.snapshot) : a.snapshot;
+    const d = a.date_jour instanceof Date ? a.date_jour.toISOString().slice(0, 10) : String(a.date_jour).slice(0, 10);
+    return { date: d, net: s.fund ? Number(s.fund.total_credite || 0) - Number(s.fund.total_retourne || 0) : 0, manquant: s.fund ? Number(s.fund.manquant || 0) : 0, created_at: a.created_at };
+  });
+  res.json({ date: dateStr, closed, report, cloture_info, warnings, archives });
+}));
+
+// Clôturer une journée : fige un snapshot immuable
+app.post('/master/reports/close', requireRole('MASTER'), wrap(async (req, res) => {
+  const mid = req.user.id;
+  const dateStr = (req.body.date && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date)) ? req.body.date : new Date().toISOString().slice(0, 10);
+  const exist = await pool.query('SELECT id FROM gam_clotures WHERE master_id=$1 AND date_jour=$2::date', [mid, dateStr]);
+  if (exist.rows.length) return res.json({ ok: true, already: true });
+  const report = await computeMasterReport(mid, req.user, dateStr);
+  await pool.query('INSERT INTO gam_clotures (master_id, date_jour, snapshot, cloture_par) VALUES ($1,$2::date,$3::jsonb,$4)', [mid, dateStr, JSON.stringify(report), mid]);
+  res.json({ ok: true, report });
 }));
 
 /* ---- Supervision des fonds Master (SUPERVISEUR uniquement) ---- */
