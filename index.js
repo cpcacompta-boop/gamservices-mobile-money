@@ -170,7 +170,7 @@ async function migrate() {
   await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS remis BOOLEAN NOT NULL DEFAULT TRUE`);
   await pool.query(`ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS versement_id INTEGER`);
   // Versements du commercial au Master (arrêté de caisse), confirmés des deux côtés en harmonie.
-  await pool.query(`CREATE TABLE IF NOT EXISTS versements (
+  await pool.query(`CREATE TABLE IF NOT EXISTS gam_versements (
     id SERIAL PRIMARY KEY,
     commercial_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     master_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -179,8 +179,8 @@ async function migrate() {
     created_at TIMESTAMPTZ DEFAULT now(),
     confirmed_at TIMESTAMPTZ
   )`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS versements_commercial ON versements(commercial_id, created_at DESC)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS versements_master ON versements(master_id, statut)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS gam_versements_commercial ON gam_versements(commercial_id, created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS gam_versements_master ON gam_versements(master_id, statut)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS uv_recharges_master ON uv_recharges(master_id, created_at DESC)`);
   await seedSuperviseur();
   console.log('\u2714 Migration terminee : base a jour.');
@@ -206,16 +206,18 @@ async function ensureCaisseSchema() {
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par INTEGER",
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS regle_par_role TEXT",
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS mode_paiement TEXT",
-    "CREATE TABLE IF NOT EXISTS versements (id SERIAL PRIMARY KEY, commercial_id INTEGER, master_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, statut TEXT NOT NULL DEFAULT 'EN_ATTENTE', created_at TIMESTAMPTZ DEFAULT now(), confirmed_at TIMESTAMPTZ)",
+    "CREATE TABLE IF NOT EXISTS gam_versements (id SERIAL PRIMARY KEY, commercial_id INTEGER, master_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, statut TEXT NOT NULL DEFAULT 'EN_ATTENTE', created_at TIMESTAMPTZ DEFAULT now(), confirmed_at TIMESTAMPTZ)",
     // Auto-réparation si une table "versements" pré-existait sans toutes ses colonnes :
-    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS commercial_id INTEGER",
-    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS master_id INTEGER",
-    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS montant NUMERIC NOT NULL DEFAULT 0",
-    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS statut TEXT NOT NULL DEFAULT 'EN_ATTENTE'",
-    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
-    "ALTER TABLE versements ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ",
-    "CREATE INDEX IF NOT EXISTS versements_commercial ON versements(commercial_id, created_at DESC)",
-    "CREATE INDEX IF NOT EXISTS versements_master ON versements(master_id, statut)"
+    "ALTER TABLE gam_versements ADD COLUMN IF NOT EXISTS commercial_id INTEGER",
+    "ALTER TABLE gam_versements ADD COLUMN IF NOT EXISTS master_id INTEGER",
+    "ALTER TABLE gam_versements ADD COLUMN IF NOT EXISTS montant NUMERIC NOT NULL DEFAULT 0",
+    "ALTER TABLE gam_versements ADD COLUMN IF NOT EXISTS statut TEXT NOT NULL DEFAULT 'EN_ATTENTE'",
+    "ALTER TABLE gam_versements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
+    "ALTER TABLE gam_versements ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS gam_versements_commercial ON gam_versements(commercial_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS gam_versements_master ON gam_versements(master_id, statut)",
+    // Défensif : si une ancienne table "versements" bloque avec des colonnes NOT NULL, on lève le blocage
+    "ALTER TABLE versements ALTER COLUMN mode DROP NOT NULL"
   ];
   for (const s of stmts) {
     try { await pool.query(s); }
@@ -270,6 +272,13 @@ function requireRole(...roles) {
 app.get('/health', wrap(async (req, res) => {
   await pool.query('SELECT 1');
   res.json({ status: 'ok', database: 'connectee' });
+}));
+
+// Contrôle de version : permet de vérifier que la dernière version tourne bien
+app.get('/version', wrap(async (req, res) => {
+  let hasGam = false;
+  try { await pool.query('SELECT 1 FROM gam_versements LIMIT 1'); hasGam = true; } catch (e) { hasGam = false; }
+  res.json({ version: 'caisse-2026-08-gam_versements', table_versements: 'gam_versements', table_prete: hasGam });
 }));
 
 // Connexion (public) — verrouillage anti-force brute PERSISTANT (en base)
@@ -710,7 +719,7 @@ app.post('/commercial/versements', requireRole('COMMERCIAL'), wrap(async (req, r
   if (!inHand.rows.length) return res.status(400).json({ error: "Tu n'as rien en main à verser à ce Master" });
   const montant = inHand.rows.reduce((s, r) => s + Number(r.montant_fcfa || 0), 0);
   const v = await pool.query(
-    "INSERT INTO versements (commercial_id, master_id, montant, statut) VALUES ($1,$2,$3,'EN_ATTENTE') RETURNING *",
+    "INSERT INTO gam_versements (commercial_id, master_id, montant, statut) VALUES ($1,$2,$3,'EN_ATTENTE') RETURNING *",
     [req.user.id, masterId, montant]);
   await pool.query("UPDATE uv_recharges SET versement_id=$1 WHERE id = ANY($2)", [v.rows[0].id, inHand.rows.map(r => r.id)]);
   const commercialNom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
@@ -739,25 +748,25 @@ app.get('/commercial/caisse', requireRole('COMMERCIAL'), wrap(async (req, res) =
 
   const enTransit = (await pool.query(
     `SELECT v.id, v.montant, v.created_at, m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username
-     FROM versements v JOIN users m ON m.id=v.master_id
+     FROM gam_versements v JOIN users m ON m.id=v.master_id
      WHERE v.commercial_id=$1 AND v.statut='EN_ATTENTE' ORDER BY v.created_at DESC`, [cid])).rows;
 
   const versements = (await pool.query(
     `SELECT v.id, v.montant, v.statut, v.created_at, v.confirmed_at, m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username
-     FROM versements v JOIN users m ON m.id=v.master_id
+     FROM gam_versements v JOIN users m ON m.id=v.master_id
      WHERE v.commercial_id=$1 AND v.statut IN ('CONFIRME','REJETE')
      ORDER BY COALESCE(v.confirmed_at, v.created_at) DESC LIMIT 100`, [cid])).rows;
 
   const totEncaisse = pdvIds.length ? Number((await pool.query(
     "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE pdv_id=ANY($1) AND regle_par=$2 AND regle_par_role='COMMERCIAL' AND statut='PAYE'", [pdvIds, cid])).rows[0].s) : 0;
-  const totVerse = Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM versements WHERE commercial_id=$1 AND statut='CONFIRME'", [cid])).rows[0].s);
+  const totVerse = Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE commercial_id=$1 AND statut='CONFIRME'", [cid])).rows[0].s);
   const totEnMain = enMain.reduce((s, r) => s + Number(r.montant), 0);
   const totEnTransit = enTransit.reduce((s, r) => s + Number(r.montant), 0);
 
   const encaisseJour = pdvIds.length ? Number((await pool.query(
     "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE pdv_id=ANY($1) AND regle_par=$2 AND regle_par_role='COMMERCIAL' AND statut='PAYE' AND paid_at::date=$3::date", [pdvIds, cid, dateStr])).rows[0].s) : 0;
   const verseJour = Number((await pool.query(
-    "SELECT COALESCE(SUM(montant),0) s FROM versements WHERE commercial_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [cid, dateStr])).rows[0].s);
+    "SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE commercial_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [cid, dateStr])).rows[0].s);
 
   res.json({
     zone: { id: zone.id, nom: zone.nom }, en_main: enMain, en_transit: enTransit, versements,
@@ -768,12 +777,12 @@ app.get('/commercial/caisse', requireRole('COMMERCIAL'), wrap(async (req, res) =
 
 // Le Master confirme la réception d'un versement -> son fonds FCFA est crédité (système = réalité)
 app.post('/master/versements/:id/confirm', requireRole('MASTER'), wrap(async (req, res) => {
-  const vq = await pool.query('SELECT * FROM versements WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
+  const vq = await pool.query('SELECT * FROM gam_versements WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
   if (!vq.rows.length) return res.status(404).json({ error: 'Versement introuvable' });
   const v = vq.rows[0];
   if (v.statut === 'CONFIRME') return res.json({ ok: true, already: true });
   if (v.statut === 'REJETE') return res.status(400).json({ error: 'Ce versement a été rejeté' });
-  await pool.query("UPDATE versements SET statut='CONFIRME', confirmed_at=now() WHERE id=$1", [v.id]);
+  await pool.query("UPDATE gam_versements SET statut='CONFIRME', confirmed_at=now() WHERE id=$1", [v.id]);
   await pool.query('UPDATE uv_recharges SET remis=TRUE WHERE versement_id=$1', [v.id]);
   const fund = await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [Number(v.montant), req.user.id]);
   sendToUser(v.commercial_id, { type: 'versement_confirmed', montant: Number(v.montant) });
@@ -783,11 +792,11 @@ app.post('/master/versements/:id/confirm', requireRole('MASTER'), wrap(async (re
 
 // Le Master rejette un versement (montant non reçu) -> l'argent repasse "en main" du commercial
 app.post('/master/versements/:id/reject', requireRole('MASTER'), wrap(async (req, res) => {
-  const vq = await pool.query('SELECT * FROM versements WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
+  const vq = await pool.query('SELECT * FROM gam_versements WHERE id=$1 AND master_id=$2', [req.params.id, req.user.id]);
   if (!vq.rows.length) return res.status(404).json({ error: 'Versement introuvable' });
   const v = vq.rows[0];
   if (v.statut !== 'EN_ATTENTE') return res.status(400).json({ error: 'Ce versement a déjà été traité' });
-  await pool.query("UPDATE versements SET statut='REJETE', confirmed_at=now() WHERE id=$1", [v.id]);
+  await pool.query("UPDATE gam_versements SET statut='REJETE', confirmed_at=now() WHERE id=$1", [v.id]);
   await pool.query('UPDATE uv_recharges SET versement_id=NULL WHERE versement_id=$1', [v.id]);
   sendToUser(v.commercial_id, { type: 'versement_rejected', montant: Number(v.montant) });
   res.json({ ok: true });
@@ -799,14 +808,14 @@ app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
   const dateStr = (req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)) ? req.query.date : new Date().toISOString().slice(0, 10);
   const pending = (await pool.query(
     `SELECT v.id, v.montant, v.created_at, c.nom AS commercial_nom, c.prenoms AS commercial_prenoms, c.username AS commercial_username
-     FROM versements v JOIN users c ON c.id=v.commercial_id
+     FROM gam_versements v JOIN users c ON c.id=v.commercial_id
      WHERE v.master_id=$1 AND v.statut='EN_ATTENTE' ORDER BY v.created_at`, [mid])).rows;
   const fcfaDirect = Number((await pool.query(
     "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND regle_par_role='MASTER' AND (mode_paiement IS NULL OR mode_paiement='FCFA') AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
   const uvJour = Number((await pool.query(
     "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND mode_paiement='UV' AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
   const fcfaVerse = Number((await pool.query(
-    "SELECT COALESCE(SUM(montant),0) s FROM versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
+    "SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
   const u = (await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [mid])).rows[0] || { solde_uv: 0, solde_fcfa: 0 };
   const fund = await getMasterFund(mid);
 
