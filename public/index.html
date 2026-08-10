@@ -944,7 +944,40 @@
       '<div style="padding:0 20px 16px"><button class="btn small" data-check-caisse type="button">Vérifier</button></div>'+
       '<div data-check-result style="padding:0 20px 18px"></div>'+
     '</div>';
-    return header+pendPanel+jourPanel+controlPanel;
+    // --- Arrêté de caisse global : l'équation complète (où se trouve tout l'argent crédité) ---
+    const f=c.fund||{};
+    const C=Number(f.total_credite||0), R=Number(f.total_retourne||0);
+    const net=C-R, caisse=Number(f.fonds_total||0);
+    const chezPdv=Number(f.en_attente_pdv||0);
+    const chezComTotal=Number(f.en_attente_commercial||0);
+    const declaredPending=(c.pending||[]).reduce((s,v)=>s+Number(v.montant||0),0);
+    const chezComNonDeclare=Math.max(0, chezComTotal-declaredPending);
+    const manquant=Number(f.manquant||0);
+    const resteAReverser=chezComNonDeclare+declaredPending;
+    const ecart=net-caisse;
+    let verdict;
+    if(manquant>0){
+      verdict='<div style="padding:12px 20px;color:var(--red);font-size:12px;font-weight:700;line-height:1.7">⚠ Manquant RÉEL : '+fmtFcfa(manquant)+' FCFA.<br><span style="font-weight:500">Cette somme manque même après avoir compté tout l\'argent encore en route — à vérifier avec le superviseur.'+((resteAReverser>0||chezPdv>0)?' (À part ça, '+fmtFcfa(resteAReverser+chezPdv)+' FCFA sont en route et rentreront séparément.)':'')+'</span></div>';
+    } else if(resteAReverser>0 || chezPdv>0){
+      verdict='<div style="padding:12px 20px;color:var(--warn);font-size:12px;font-weight:700;line-height:1.7">⏳ Aucun manquant réel — mais '+fmtFcfa(ecart)+' FCFA sont encore en route.<br><span style="font-weight:500">'+
+        (resteAReverser>0?'À reverser par les commerciaux : <b>'+fmtFcfa(resteAReverser)+' FCFA</b>'+(declaredPending>0?' (dont <b>'+fmtFcfa(declaredPending)+' FCFA</b> à confirmer par toi maintenant)':'')+'. ':'')+
+        (chezPdv>0?'Encore chez les PDV : <b>'+fmtFcfa(chezPdv)+' FCFA</b>. ':'')+
+        'Assure-toi que tout est reversé avant de conclure ton point.</span></div>';
+    } else {
+      verdict='<div style="padding:12px 20px;color:var(--pos);font-size:12px;font-weight:700">✔ Ta caisse tombe parfaitement : Fonds UV + FCFA = Total crédité − Total retourné. Aucun manquant, rien en route.</div>';
+    }
+    const pointPanel='<div class="panel"><div class="panel-head"><h3>Arrêté de caisse — ton point</h3><span class="hint">Où se trouve tout l\'argent crédité depuis le début</span></div>'+
+      '<div class="table-wrap"><table><tbody>'+
+        '<tr><td>Total crédité depuis le début</td><td style="text-align:right"><b>'+fmtFcfa(C)+'</b> FCFA</td></tr>'+
+        '<tr><td>− Total retourné au superviseur</td><td style="text-align:right">'+fmtFcfa(R)+' FCFA</td></tr>'+
+        '<tr style="border-top:2px solid var(--line)"><td><b>= Net à justifier</b></td><td style="text-align:right"><b>'+fmtFcfa(net)+'</b> FCFA</td></tr>'+
+        '<tr><td>Dans ta caisse (Fonds UV + FCFA)</td><td style="text-align:right">'+fmtFcfa(caisse)+' FCFA</td></tr>'+
+        '<tr><td>Encore chez les PDV (pas encaissé)</td><td style="text-align:right">'+fmtFcfa(chezPdv)+' FCFA</td></tr>'+
+        '<tr><td>Chez les commerciaux (encaissé, pas reversé)</td><td style="text-align:right">'+fmtFcfa(chezComNonDeclare)+' FCFA</td></tr>'+
+        '<tr><td>Versements déclarés à confirmer</td><td style="text-align:right">'+fmtFcfa(declaredPending)+' FCFA</td></tr>'+
+        '<tr style="border-top:2px solid var(--line)"><td><b>Manquant réel</b></td><td style="text-align:right"><b style="color:'+(manquant>0?'var(--red)':'var(--pos)')+'">'+fmtFcfa(manquant)+'</b> FCFA</td></tr>'+
+      '</tbody></table></div>'+verdict+'</div>';
+    return header+pointPanel+pendPanel+jourPanel+controlPanel;
   }
 
   /* ---------- COMMERCIAL : recouvrement du cash chez les PDV de sa zone ---------- */
