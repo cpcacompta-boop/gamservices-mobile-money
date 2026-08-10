@@ -642,14 +642,15 @@
     recharges:'<circle cx="12" cy="12" r="9"/><path d="M9.5 15.2c.4.9 1.3 1.5 2.5 1.5 1.6 0 2.6-.9 2.6-2 0-1.3-1.1-1.8-2.6-2.2-1.5-.4-2.6-.9-2.6-2.2 0-1.1 1-2 2.6-2 1.2 0 2.1.6 2.5 1.5"/><path d="M12 6.5v11"/>',
     fonds:'<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/>',
     recouvrement:'<path d="M21 12V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9"/><path d="M3 10h18"/><path d="M16.5 17.5l2 2 3.5-3.5"/>',
-    caisse:'<path d="M4 9h16l-1 10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/><circle cx="12" cy="14" r="1.6"/>'
+    caisse:'<path d="M4 9h16l-1 10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/><circle cx="12" cy="14" r="1.6"/>',
+    rapports:'<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6M9 9h2"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges','caisse'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -661,7 +662,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -694,8 +695,12 @@
       const d=S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'';
       try{ S.masterCaisse=await api('/master/caisse'+d); }catch(e){ S.masterCaisse={_error:e.message||'Erreur serveur'}; }
     }
+    if(v==='rapports' && S.auth.user.role==='MASTER'){
+      const d=S.rapportsDate?('?date='+encodeURIComponent(S.rapportsDate)):'';
+      try{ S.rapports=await api('/master/reports'+d); }catch(e){ S.rapports={_error:e.message||'Erreur serveur'}; }
+    }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -875,15 +880,15 @@
       '<td style="width:50%;text-align:center;vertical-align:top"><b>'+esc(b)+'</b><br><br><br><br>_____________________________<br><span style="font-size:10px;color:#555">Nom, date & signature</span></td>'+
     '</tr></table>';
   }
-  function nonPointesReportHtml(){
-    const np=(S.masterCaisse&&S.masterCaisse.point&&S.masterCaisse.point.non_pointes)||[];
+  function nonPointesReportHtml(report){
+    const np=(report&&report.point&&report.point.non_pointes)||[];
     if(!np.length) return '';
     return '<div style="margin-top:16px;font-size:12px;font-weight:700">PDV non pointés — restant à recouvrer :</div>'+
-      reportTable(['Point de vente','Montant en attente (FCFA)'], np.map(function(n){return [esc(n.nom_commercial||n.pdv_username), '<b>'+fmtFcfa(n.montant)+'</b>'];}));
+      reportTable(['Point de vente','Montant en attente (FCFA)'], np.map(function(n){return [esc(n.pdv||n.nom_commercial||n.pdv_username), '<b>'+fmtFcfa(n.montant)+'</b>'];}));
   }
 
-  function printFicheCommercial(com){
-    const c=S.masterCaisse||{}; const date=(c.jour&&c.jour.date)||''; const master=(c.master&&c.master.nom)||'';
+  function printFicheCommercial(com, report){
+    report=report||{}; const date=(report.jour&&report.jour.date)||report.date||''; const master=(report.master&&report.master.nom)||'';
     const rows=com.pdvs.map(function(p,i){ return [String(i+1), esc(p.pdv), fmtFcfa(p.montant), p.remis?'Oui':'Non']; });
     let body='<div style="font-size:12px;margin-bottom:8px"><b>Date :</b> '+esc(date)+' &nbsp;&nbsp;&nbsp; <b>Zone :</b> '+esc(com.zone_nom||'—')+'<br><b>Master :</b> '+esc(master)+' &nbsp;&nbsp;&nbsp; <b>Commercial :</b> '+esc(com.commercial_nom)+'</div>';
     body+=reportTable(['N°','Point de vente','Montant encaissé (FCFA)','Reversé'], rows.length?rows:[['—','Aucun encaissement ce jour','0','—']]);
@@ -892,20 +897,20 @@
       '<b>Total encaissé :</b> '+fmtFcfa(com.total)+' FCFA<br>'+
       '<b>Total reversé / confirmé :</b> '+fmtFcfa(com.total_remis)+' FCFA<br>'+
       '<b>Reste à reverser :</b> '+fmtFcfa(reste)+' FCFA</div>';
-    body+=nonPointesReportHtml();
+    body+=nonPointesReportHtml(report);
     body+=signatureBlock('Le Commercial','Le Master');
     printReport(reportShell('Fiche de point journalier — Master & Commercial', body));
   }
 
-  function printArreteMaster(){
-    const c=S.masterCaisse; if(!c){ return; }
-    const f=c.fund||{}; const j=c.jour||{};
+  function printArreteMaster(report){
+    if(!report){ return; }
+    const f=report.fund||{}; const j=report.jour||{};
     const C=Number(f.total_credite||0),R=Number(f.total_retourne||0),net=C-R,caisse=Number(f.fonds_total||0);
     const chezPdv=Number(f.en_attente_pdv||0), chezComTotal=Number(f.en_attente_commercial||0);
-    const declaredPending=(c.pending||[]).reduce((s,v)=>s+Number(v.montant||0),0);
+    const declaredPending=Number(report.pending_total||0);
     const chezComNonDeclare=Math.max(0,chezComTotal-declaredPending);
-    const manquant=Number(f.manquant||0); const master=(c.master&&c.master.nom)||'';
-    let body='<div style="font-size:12px;margin-bottom:8px"><b>Date :</b> '+esc(j.date||'')+' &nbsp;&nbsp;&nbsp; <b>Master :</b> '+esc(master)+'</div>';
+    const manquant=Number(f.manquant||0); const master=(report.master&&report.master.nom)||'';
+    let body='<div style="font-size:12px;margin-bottom:8px"><b>Date :</b> '+esc(j.date||report.date||'')+' &nbsp;&nbsp;&nbsp; <b>Master :</b> '+esc(master)+'</div>';
     body+=reportTable(['Arrêté de caisse','Montant (FCFA)'],[
       ['Total crédité depuis le début','<b>'+fmtFcfa(C)+'</b>'],
       ['− Total retourné au superviseur', fmtFcfa(R)],
@@ -916,11 +921,84 @@
       ['Versements à confirmer', fmtFcfa(declaredPending)],
       ['MANQUANT RÉEL','<b>'+fmtFcfa(manquant)+'</b>']
     ]);
-    body+='<div style="margin-top:12px;font-size:12px"><b>Encaissé le '+esc(j.date||'')+' :</b><br>'+
+    body+='<div style="margin-top:12px;font-size:12px"><b>Encaissé le '+esc(j.date||report.date||'')+' :</b><br>'+
       'FCFA (paiements directs) : '+fmtFcfa(j.fcfa_direct)+' &nbsp;|&nbsp; FCFA (reçu des commerciaux) : '+fmtFcfa(j.fcfa_verse)+' &nbsp;|&nbsp; UV (retours) : '+fmtFcfa(j.uv)+'</div>';
-    body+=nonPointesReportHtml();
+    body+=nonPointesReportHtml(report);
     body+=signatureBlock('Le Master','Le Superviseur');
     printReport(reportShell('Fiche de point — Master & Superviseur', body));
+  }
+
+  /* ---------- POINTS & RAPPORTS (Master) : 3 niveaux + clôture figée + archives ---------- */
+  function renderRapports(){
+    const r=S.rapports;
+    if(r && r._error){ return caisseErrorPanel(r._error); }
+    if(!r){ return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;text-align:center">Chargement…</div></div>'; }
+    const rep=r.report||{}; const closed=!!r.closed; const dateStr=r.date||'';
+    const header=`<div class="welcome"><h2>Points &amp; Rapports 📑</h2><p>Le point officiel du jour, à imprimer et faire signer. Une fois clôturé, le rapport est figé et archivé.</p></div>`;
+    let statusBar='<div class="panel"><div style="padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+      '<label style="font-size:11px;color:var(--ink-soft);font-weight:700">Jour :</label>'+
+      '<input type="date" data-rap-date value="'+esc(dateStr)+'" style="max-width:170px">'+
+      '<button class="btn small" data-rap-today type="button">Aujourd\'hui</button>'+
+      (closed?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Clôturé</span>'+(r.cloture_info?'<span style="font-size:11px;color:var(--ink-soft)">'+esc(timeAgo(r.cloture_info.created_at))+' · '+esc(r.cloture_info.par||'')+'</span>':''):'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">Non clôturé</span>')+
+      '</div></div>';
+    // Niveau 1 — PDV
+    const pdvs=(rep.point&&rep.point.pdvs)||[];
+    const pdvPanel='<div class="panel"><div class="panel-head"><h3>Niveau 1 — Point des PDV</h3><span class="hint">Encaissé du jour et reste, par point de vente</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>Encaissé (jour)</th><th>Reste</th><th>État</th></tr></thead><tbody>'+
+      (pdvs.length?pdvs.map(function(p){ const fait=Number(p.reste||0)===0;
+        return '<tr><td>'+esc(p.pdv)+'</td><td><b>'+fmtFcfa(p.encaisse_jour)+'</b> FCFA</td><td>'+fmtFcfa(p.reste)+' FCFA</td><td>'+(fait?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Fait ✔</span>':'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">À finir</span>')+'</td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="4">Aucune activité PDV ce jour</td></tr>')+
+      '</tbody></table></div></div>';
+    // Niveau 2 — Commercial
+    const coms=(rep.point&&rep.point.commerciaux)||[];
+    const comPanel='<div class="panel"><div class="panel-head"><h3>Niveau 2 — Point Commercial ↔ Master</h3><span class="hint">Fiche par commercial, à imprimer et faire signer</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Encaissé</th><th>Reversé</th><th>Reste</th><th>Fiche</th></tr></thead><tbody>'+
+      (coms.length?coms.map(function(cm,i){ const reste=cm.total-cm.total_remis;
+        return '<tr><td>'+esc(cm.commercial_nom)+(cm.zone_nom?' <span style="color:var(--ink-soft);font-size:11px">('+esc(cm.zone_nom)+')</span>':'')+'</td><td><b>'+fmtFcfa(cm.total)+'</b> FCFA</td><td>'+fmtFcfa(cm.total_remis)+' FCFA</td><td>'+fmtFcfa(reste)+' FCFA</td><td><button class="btn small" data-rap-fiche="'+i+'" type="button">🖨️ Imprimer</button></td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="5">Aucun commercial actif ce jour</td></tr>')+
+      '</tbody></table></div></div>';
+    // Niveau 3 — Arrêté global
+    const f=rep.fund||{};
+    const C=Number(f.total_credite||0),R2=Number(f.total_retourne||0),net=C-R2,caisse=Number(f.fonds_total||0);
+    const chezPdv=Number(f.en_attente_pdv||0), chezComTotal=Number(f.en_attente_commercial||0);
+    const declaredPending=Number(rep.pending_total||0);
+    const chezComNonDeclare=Math.max(0,chezComTotal-declaredPending);
+    const manquant=Number(f.manquant||0);
+    const arretePanel='<div class="panel"><div class="panel-head"><h3>Niveau 3 — Point Master ↔ Superviseur</h3><span class="hint">Arrêté de caisse global</span></div>'+
+      '<div class="table-wrap"><table><tbody>'+
+        '<tr><td>Total crédité depuis le début</td><td style="text-align:right"><b>'+fmtFcfa(C)+'</b> FCFA</td></tr>'+
+        '<tr><td>− Total retourné au superviseur</td><td style="text-align:right">'+fmtFcfa(R2)+' FCFA</td></tr>'+
+        '<tr style="border-top:2px solid var(--line)"><td><b>= Net à justifier</b></td><td style="text-align:right"><b>'+fmtFcfa(net)+'</b> FCFA</td></tr>'+
+        '<tr><td>Dans ta caisse (Fonds UV + FCFA)</td><td style="text-align:right">'+fmtFcfa(caisse)+' FCFA</td></tr>'+
+        '<tr><td>Encore chez les PDV</td><td style="text-align:right">'+fmtFcfa(chezPdv)+' FCFA</td></tr>'+
+        '<tr><td>Chez les commerciaux (pas reversé)</td><td style="text-align:right">'+fmtFcfa(chezComNonDeclare)+' FCFA</td></tr>'+
+        '<tr><td>Versements à confirmer</td><td style="text-align:right">'+fmtFcfa(declaredPending)+' FCFA</td></tr>'+
+        '<tr style="border-top:2px solid var(--line)"><td><b>Manquant réel</b></td><td style="text-align:right"><b style="color:'+(manquant>0?'var(--red)':'var(--pos)')+'">'+fmtFcfa(manquant)+'</b> FCFA</td></tr>'+
+      '</tbody></table></div>'+
+      '<div style="padding:12px 20px"><button class="btn small" data-rap-print-arrete type="button">🖨️ Imprimer l\'arrêté (Master ↔ Superviseur)</button></div></div>';
+    // Clôture
+    let closePanel;
+    if(closed){
+      closePanel='<div class="panel" style="background:var(--pos-soft);border:1px solid var(--pos)"><div style="padding:16px 20px;color:var(--pos);font-size:12px;font-weight:700;line-height:1.7">🔒 Journée clôturée — rapport définitif et archivé.<br><span style="font-weight:500">Les chiffres sont figés. Tu peux le réimprimer autant que tu veux.</span></div></div>';
+    } else {
+      const w=r.warnings||{}; let warn='';
+      if(w.pending_count>0 || w.non_pointes_count>0){
+        warn='<div style="padding:0 20px 8px;color:var(--warn);font-size:11px;font-weight:700;line-height:1.7">⚠ Avant de clôturer :'+
+          (w.pending_count>0?'<br>• '+w.pending_count+' versement(s) à confirmer ('+fmtFcfa(w.pending_total)+' FCFA)':'')+
+          (w.non_pointes_count>0?'<br>• '+w.non_pointes_count+' PDV non pointé(s) ('+fmtFcfa(w.non_pointes_total)+' FCFA) — seront reportés':'')+'</div>';
+      }
+      closePanel='<div class="panel"><div class="panel-head"><h3>Clôturer la journée</h3><span class="hint">Fige définitivement les chiffres de ce jour</span></div>'+warn+
+        '<div style="padding:8px 20px 18px"><button class="btn" data-rap-close type="button">🔒 Clôturer la journée du '+esc(dateStr)+'</button></div></div>';
+    }
+    // Archives
+    const arch=r.archives||[];
+    const archPanel='<div class="panel"><div class="panel-head"><h3>Archives des clôtures</h3><span class="hint">Journées déjà clôturées (réimprimables)</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Net justifié</th><th>Manquant</th><th></th></tr></thead><tbody>'+
+      (arch.length?arch.map(function(a){
+        return '<tr><td>'+esc(a.date)+'</td><td>'+fmtFcfa(a.net)+' FCFA</td><td>'+(Number(a.manquant)>0?'<b style="color:var(--red)">'+fmtFcfa(a.manquant)+'</b>':fmtFcfa(a.manquant))+' FCFA</td><td><button class="btn small" data-rap-open="'+esc(a.date)+'" type="button">Ouvrir</button></td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="4">Aucune clôture pour le moment</td></tr>')+
+      '</tbody></table></div></div>';
+    return header+statusBar+pdvPanel+comPanel+arretePanel+closePanel+archPanel;
   }
 
   /* ---------- MA CAISSE (arrêté de caisse : commercial & master) ---------- */
@@ -1030,60 +1108,9 @@
       '<div style="padding:0 20px 16px"><button class="btn small" data-check-caisse type="button">Vérifier</button></div>'+
       '<div data-check-result style="padding:0 20px 18px"></div>'+
     '</div>';
-    // --- Arrêté de caisse global : l'équation complète (où se trouve tout l'argent crédité) ---
-    const f=c.fund||{};
-    const C=Number(f.total_credite||0), R=Number(f.total_retourne||0);
-    const net=C-R, caisse=Number(f.fonds_total||0);
-    const chezPdv=Number(f.en_attente_pdv||0);
-    const chezComTotal=Number(f.en_attente_commercial||0);
-    const declaredPending=(c.pending||[]).reduce((s,v)=>s+Number(v.montant||0),0);
-    const chezComNonDeclare=Math.max(0, chezComTotal-declaredPending);
-    const manquant=Number(f.manquant||0);
-    const resteAReverser=chezComNonDeclare+declaredPending;
-    const ecart=net-caisse;
-    let verdict;
-    if(manquant>0){
-      verdict='<div style="padding:12px 20px;color:var(--red);font-size:12px;font-weight:700;line-height:1.7">⚠ Manquant RÉEL : '+fmtFcfa(manquant)+' FCFA.<br><span style="font-weight:500">Cette somme manque même après avoir compté tout l\'argent encore en route — à vérifier avec le superviseur.'+((resteAReverser>0||chezPdv>0)?' (À part ça, '+fmtFcfa(resteAReverser+chezPdv)+' FCFA sont en route et rentreront séparément.)':'')+'</span></div>';
-    } else if(resteAReverser>0 || chezPdv>0){
-      verdict='<div style="padding:12px 20px;color:var(--warn);font-size:12px;font-weight:700;line-height:1.7">⏳ Aucun manquant réel — mais '+fmtFcfa(ecart)+' FCFA sont encore en route.<br><span style="font-weight:500">'+
-        (resteAReverser>0?'À reverser par les commerciaux : <b>'+fmtFcfa(resteAReverser)+' FCFA</b>'+(declaredPending>0?' (dont <b>'+fmtFcfa(declaredPending)+' FCFA</b> à confirmer par toi maintenant)':'')+'. ':'')+
-        (chezPdv>0?'Encore chez les PDV : <b>'+fmtFcfa(chezPdv)+' FCFA</b>. ':'')+
-        'Assure-toi que tout est reversé avant de conclure ton point.</span></div>';
-    } else {
-      verdict='<div style="padding:12px 20px;color:var(--pos);font-size:12px;font-weight:700">✔ Ta caisse tombe parfaitement : Fonds UV + FCFA = Total crédité − Total retourné. Aucun manquant, rien en route.</div>';
-    }
-    const pointPanel='<div class="panel"><div class="panel-head"><h3>Arrêté de caisse — ton point</h3><span class="hint">Où se trouve tout l\'argent crédité depuis le début</span></div>'+
-      '<div class="table-wrap"><table><tbody>'+
-        '<tr><td>Total crédité depuis le début</td><td style="text-align:right"><b>'+fmtFcfa(C)+'</b> FCFA</td></tr>'+
-        '<tr><td>− Total retourné au superviseur</td><td style="text-align:right">'+fmtFcfa(R)+' FCFA</td></tr>'+
-        '<tr style="border-top:2px solid var(--line)"><td><b>= Net à justifier</b></td><td style="text-align:right"><b>'+fmtFcfa(net)+'</b> FCFA</td></tr>'+
-        '<tr><td>Dans ta caisse (Fonds UV + FCFA)</td><td style="text-align:right">'+fmtFcfa(caisse)+' FCFA</td></tr>'+
-        '<tr><td>Encore chez les PDV (pas encaissé)</td><td style="text-align:right">'+fmtFcfa(chezPdv)+' FCFA</td></tr>'+
-        '<tr><td>Chez les commerciaux (encaissé, pas reversé)</td><td style="text-align:right">'+fmtFcfa(chezComNonDeclare)+' FCFA</td></tr>'+
-        '<tr><td>Versements déclarés à confirmer</td><td style="text-align:right">'+fmtFcfa(declaredPending)+' FCFA</td></tr>'+
-        '<tr style="border-top:2px solid var(--line)"><td><b>Manquant réel</b></td><td style="text-align:right"><b style="color:'+(manquant>0?'var(--red)':'var(--pos)')+'">'+fmtFcfa(manquant)+'</b> FCFA</td></tr>'+
-      '</tbody></table></div>'+verdict+
-      '<div style="padding:0 20px 16px"><button class="btn small" data-print-arrete type="button">🖨️ Imprimer mon arrêté (à faire signer par le superviseur)</button></div>'+
-      '</div>';
-    // Fiches de point du jour Master <-> Commercial (à imprimer et faire signer)
-    const pts=(c.point&&c.point.commerciaux)||[];
-    const fichesPanel='<div class="panel"><div class="panel-head"><h3>Fiches de point du jour — Master &amp; Commercial</h3><span class="hint">À imprimer et faire signer par chaque commercial</span></div>'+
-      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Encaissé</th><th>Reversé</th><th>Reste</th><th>Fiche</th></tr></thead><tbody>'+
-      (pts.length?pts.map(function(cm,i){ const reste=cm.total-cm.total_remis;
-        return '<tr><td>'+esc(cm.commercial_nom)+(cm.zone_nom?' <span style="color:var(--ink-soft);font-size:11px">('+esc(cm.zone_nom)+')</span>':'')+'</td>'+
-          '<td><b>'+fmtFcfa(cm.total)+'</b> FCFA</td><td>'+fmtFcfa(cm.total_remis)+' FCFA</td><td>'+fmtFcfa(reste)+' FCFA</td>'+
-          '<td><button class="btn small" data-print-fiche="'+i+'" type="button">🖨️ Imprimer</button></td></tr>';
-      }).join(''):'<tr class="empty-row"><td colspan="5">Aucune activité de commercial ce jour</td></tr>')+
-      '</tbody></table></div></div>';
-    // PDV non pointés (restant à recouvrer) + explication
-    const np=(c.point&&c.point.non_pointes)||[];
-    const npPanel=np.length?('<div class="panel"><div class="panel-head"><h3>PDV non pointés — restant à recouvrer</h3><span class="hint">Points non effectués : reportés automatiquement</span></div>'+
-      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>Montant en attente</th></tr></thead><tbody>'+
-      np.map(function(n){return '<tr><td>'+esc(n.nom_commercial||n.pdv_username)+'</td><td><b>'+fmtFcfa(n.montant)+'</b> FCFA</td></tr>';}).join('')+
-      '</tbody></table></div>'+
-      '<div style="padding:10px 20px 14px;color:var(--ink-soft);font-size:11px;line-height:1.6">Un PDV qui n\'a pas pu faire son point reste « en attente » : le montant <b>n\'est pas compté comme reçu</b> et est <b>reporté automatiquement</b> au jour suivant jusqu\'au règlement. Rien n\'est perdu, et il apparaît sur tes fiches comme « restant à recouvrer ».</div>'+
-      '</div>'):'';
-    return header+pointPanel+fichesPanel+npPanel+pendPanel+jourPanel+controlPanel;
+    // Rappel : l'arrêté officiel, les fiches et la clôture sont dans « Points & Rapports »
+    const lienRapports='<div class="panel"><div style="padding:16px 20px;font-size:11px;color:var(--ink-soft);line-height:1.6">📑 Pour ton <b>point officiel du jour</b> (fiches à signer, arrêté et clôture), va dans <b>« Points &amp; Rapports »</b>.<div style="margin-top:10px"><button class="btn small" data-goto="rapports" type="button">Ouvrir Points &amp; Rapports</button></div></div></div>';
+    return header+pendPanel+jourPanel+controlPanel+lienRapports;
   }
 
   /* ---------- COMMERCIAL : recouvrement du cash chez les PDV de sa zone ---------- */
@@ -1885,13 +1912,30 @@
         dlgSuccess('Versement rejeté','Le commercial a été notifié, l\'argent est de nouveau en main.');
       }catch(err){ b.disabled=false; b.textContent='Rejeter'; dlgError('Erreur',err.message); }
     }));
-    const pArrete=document.querySelector('[data-print-arrete]');
-    if(pArrete) pArrete.addEventListener('click', printArreteMaster);
-    document.querySelectorAll('[data-print-fiche]').forEach(b=>b.addEventListener('click', ()=>{
-      const idx=Number(b.dataset.printFiche);
-      const list=(S.masterCaisse&&S.masterCaisse.point&&S.masterCaisse.point.commerciaux)||[];
-      if(list[idx]) printFicheCommercial(list[idx]);
+    // ---- Points & Rapports (Master) ----
+    const rapDate=document.querySelector('[data-rap-date]');
+    if(rapDate) rapDate.addEventListener('change', ()=>{ S.rapportsDate=rapDate.value||null; loadView('rapports').then(renderView); });
+    const rapToday=document.querySelector('[data-rap-today]');
+    if(rapToday) rapToday.addEventListener('click', ()=>{ S.rapportsDate=null; loadView('rapports').then(renderView); });
+    const rapArrete=document.querySelector('[data-rap-print-arrete]');
+    if(rapArrete) rapArrete.addEventListener('click', ()=>{ if(S.rapports&&S.rapports.report) printArreteMaster(S.rapports.report); });
+    document.querySelectorAll('[data-rap-fiche]').forEach(b=>b.addEventListener('click', ()=>{
+      const idx=Number(b.dataset.rapFiche);
+      const rep=(S.rapports&&S.rapports.report)||{}; const list=(rep.point&&rep.point.commerciaux)||[];
+      if(list[idx]) printFicheCommercial(list[idx], rep);
     }));
+    document.querySelectorAll('[data-rap-open]').forEach(b=>b.addEventListener('click', ()=>{ S.rapportsDate=b.dataset.rapOpen; loadView('rapports').then(renderView); }));
+    const rapClose=document.querySelector('[data-rap-close]');
+    if(rapClose) rapClose.addEventListener('click', async ()=>{
+      const dt=(S.rapports&&S.rapports.date)||'';
+      const ok=await dlgConfirm('Clôturer la journée ?','Une fois clôturée, la journée du '+dt+' est FIGÉE : les chiffres deviennent définitifs et archivés. Tu ne pourras plus les modifier.',{type:'danger',okText:'Oui, clôturer'});
+      if(!ok) return; rapClose.disabled=true; rapClose.textContent='…';
+      try{
+        await api('/master/reports/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:dt})});
+        await loadView('rapports'); renderView();
+        dlgSuccess('Journée clôturée','Le rapport du '+dt+' est figé et archivé.');
+      }catch(err){ rapClose.disabled=false; rapClose.textContent='🔒 Clôturer'; dlgError('Erreur', err.message); }
+    });
     const cRetry=document.querySelector('[data-caisse-retry]');
     if(cRetry) cRetry.addEventListener('click', ()=>{ loadView('caisse').then(renderView); });
     // ---- Ma caisse : filtre par date ----
