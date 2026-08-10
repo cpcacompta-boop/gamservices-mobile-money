@@ -809,10 +809,41 @@ app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
     "SELECT COALESCE(SUM(montant),0) s FROM versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
   const u = (await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [mid])).rows[0] || { solde_uv: 0, solde_fcfa: 0 };
   const fund = await getMasterFund(mid);
+
+  // Détail du jour, groupé par commercial, pour la fiche de point Master <-> Commercial
+  const collected = (await pool.query(
+    `SELECT rc.regle_par AS commercial_id, cu.nom AS c_nom, cu.prenoms AS c_prenoms, cu.username AS c_username,
+            z.nom AS zone_nom, p.nom_commercial, p.username AS pdv_username, rc.montant_fcfa, rc.remis
+     FROM uv_recharges rc
+     JOIN users p ON p.id=rc.pdv_id
+     LEFT JOIN users cu ON cu.id=rc.regle_par
+     LEFT JOIN zones z ON z.id=p.zone_id
+     WHERE rc.master_id=$1 AND rc.statut='PAYE' AND rc.regle_par_role='COMMERCIAL' AND rc.paid_at::date=$2::date
+     ORDER BY cu.nom NULLS LAST, p.nom_commercial NULLS LAST`, [mid, dateStr])).rows;
+  const byCom = {};
+  for (const r of collected) {
+    const k = r.commercial_id || 0;
+    if (!byCom[k]) byCom[k] = { commercial_id: r.commercial_id, commercial_nom: [r.c_nom, r.c_prenoms].filter(Boolean).join(' ') || r.c_username || '—', zone_nom: r.zone_nom || '', pdvs: [], total: 0, total_remis: 0 };
+    const m = Number(r.montant_fcfa || 0);
+    byCom[k].pdvs.push({ pdv: r.nom_commercial || r.pdv_username, montant: m, remis: !!r.remis });
+    byCom[k].total += m; if (r.remis) byCom[k].total_remis += m;
+  }
+  const commerciaux = Object.values(byCom);
+
+  // PDV non pointés (recharges encore en attente, non encaissées) : restant à recouvrer
+  const nonPointes = (await pool.query(
+    `SELECT p.nom_commercial, p.username AS pdv_username, COALESCE(SUM(rc.montant_fcfa),0) AS montant
+     FROM uv_recharges rc JOIN users p ON p.id=rc.pdv_id
+     WHERE rc.master_id=$1 AND rc.statut='EN_ATTENTE'
+     GROUP BY p.nom_commercial, p.username HAVING COALESCE(SUM(rc.montant_fcfa),0) > 0
+     ORDER BY p.nom_commercial NULLS LAST`, [mid])).rows;
+
   res.json({
     pending,
     solde: u,
     fund,
+    master: { nom: [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username },
+    point: { commerciaux, non_pointes: nonPointes },
     jour: { date: dateStr, fcfa_direct: fcfaDirect, fcfa_verse: fcfaVerse, fcfa_total: fcfaDirect + fcfaVerse, uv: uvJour }
   });
 }));
