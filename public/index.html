@@ -340,6 +340,14 @@
     .login-box h1{font-size:11px;} .login-gh{width:86px;}
   }
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+  /* Impression : on ne montre QUE la fiche (#print-root), tout le reste est masqué */
+  #print-root{display:none;}
+  @media print{
+    body{background:#fff !important;}
+    body > *:not(#print-root){display:none !important;}
+    #print-root{display:block !important;}
+    @page{margin:14mm;}
+  }
 </style>
 </head>
 <body>
@@ -837,6 +845,84 @@
       </div>`;
     return header+search+detail+allCredits;
   }
+  /* ---------- IMPRESSION DES FICHES DE POINT (avec signatures) ---------- */
+  function printReport(html){
+    let root=document.getElementById('print-root');
+    if(!root){ root=document.createElement('div'); root.id='print-root'; document.body.appendChild(root); }
+    root.innerHTML=html;
+    setTimeout(function(){ window.print(); }, 60);
+  }
+  function reportShell(title, bodyHtml){
+    const now=new Date();
+    return '<div style="font-family:Arial,Helvetica,sans-serif;color:#111;font-size:12px;line-height:1.5;padding:4px">'+
+      '<div style="text-align:center;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:14px">'+
+        '<div style="font-size:17px;font-weight:800;letter-spacing:.03em">GAMSERVICES HOLDING</div>'+
+        '<div style="font-size:11px;color:#444">Gestion Mobile Money — Côte d\'Ivoire</div>'+
+      '</div>'+
+      '<h2 style="font-size:14px;text-align:center;margin:0 0 12px;text-transform:uppercase">'+esc(title)+'</h2>'+
+      bodyHtml+
+      '<div style="margin-top:22px;font-size:10px;color:#666;border-top:1px solid #ccc;padding-top:6px">Document généré le '+now.toLocaleString('fr-FR')+' — GAMServices Holding</div>'+
+    '</div>';
+  }
+  function reportTable(headers, rows){
+    return '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">'+
+      '<thead><tr>'+headers.map(function(h){return '<th style="border:1px solid #999;padding:6px 8px;background:#eee;text-align:left">'+esc(h)+'</th>';}).join('')+'</tr></thead>'+
+      '<tbody>'+rows.map(function(r){return '<tr>'+r.map(function(cell,i){return '<td style="border:1px solid #999;padding:6px 8px'+(i>0?';text-align:right':'')+'">'+cell+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table>';
+  }
+  function signatureBlock(a,b){
+    return '<table style="width:100%;margin-top:40px;font-size:12px"><tr>'+
+      '<td style="width:50%;text-align:center;vertical-align:top"><b>'+esc(a)+'</b><br><br><br><br>_____________________________<br><span style="font-size:10px;color:#555">Nom, date & signature</span></td>'+
+      '<td style="width:50%;text-align:center;vertical-align:top"><b>'+esc(b)+'</b><br><br><br><br>_____________________________<br><span style="font-size:10px;color:#555">Nom, date & signature</span></td>'+
+    '</tr></table>';
+  }
+  function nonPointesReportHtml(){
+    const np=(S.masterCaisse&&S.masterCaisse.point&&S.masterCaisse.point.non_pointes)||[];
+    if(!np.length) return '';
+    return '<div style="margin-top:16px;font-size:12px;font-weight:700">PDV non pointés — restant à recouvrer :</div>'+
+      reportTable(['Point de vente','Montant en attente (FCFA)'], np.map(function(n){return [esc(n.nom_commercial||n.pdv_username), '<b>'+fmtFcfa(n.montant)+'</b>'];}));
+  }
+
+  function printFicheCommercial(com){
+    const c=S.masterCaisse||{}; const date=(c.jour&&c.jour.date)||''; const master=(c.master&&c.master.nom)||'';
+    const rows=com.pdvs.map(function(p,i){ return [String(i+1), esc(p.pdv), fmtFcfa(p.montant), p.remis?'Oui':'Non']; });
+    let body='<div style="font-size:12px;margin-bottom:8px"><b>Date :</b> '+esc(date)+' &nbsp;&nbsp;&nbsp; <b>Zone :</b> '+esc(com.zone_nom||'—')+'<br><b>Master :</b> '+esc(master)+' &nbsp;&nbsp;&nbsp; <b>Commercial :</b> '+esc(com.commercial_nom)+'</div>';
+    body+=reportTable(['N°','Point de vente','Montant encaissé (FCFA)','Reversé'], rows.length?rows:[['—','Aucun encaissement ce jour','0','—']]);
+    const reste=com.total-com.total_remis;
+    body+='<div style="margin-top:10px;font-size:12px">'+
+      '<b>Total encaissé :</b> '+fmtFcfa(com.total)+' FCFA<br>'+
+      '<b>Total reversé / confirmé :</b> '+fmtFcfa(com.total_remis)+' FCFA<br>'+
+      '<b>Reste à reverser :</b> '+fmtFcfa(reste)+' FCFA</div>';
+    body+=nonPointesReportHtml();
+    body+=signatureBlock('Le Commercial','Le Master');
+    printReport(reportShell('Fiche de point journalier — Master & Commercial', body));
+  }
+
+  function printArreteMaster(){
+    const c=S.masterCaisse; if(!c){ return; }
+    const f=c.fund||{}; const j=c.jour||{};
+    const C=Number(f.total_credite||0),R=Number(f.total_retourne||0),net=C-R,caisse=Number(f.fonds_total||0);
+    const chezPdv=Number(f.en_attente_pdv||0), chezComTotal=Number(f.en_attente_commercial||0);
+    const declaredPending=(c.pending||[]).reduce((s,v)=>s+Number(v.montant||0),0);
+    const chezComNonDeclare=Math.max(0,chezComTotal-declaredPending);
+    const manquant=Number(f.manquant||0); const master=(c.master&&c.master.nom)||'';
+    let body='<div style="font-size:12px;margin-bottom:8px"><b>Date :</b> '+esc(j.date||'')+' &nbsp;&nbsp;&nbsp; <b>Master :</b> '+esc(master)+'</div>';
+    body+=reportTable(['Arrêté de caisse','Montant (FCFA)'],[
+      ['Total crédité depuis le début','<b>'+fmtFcfa(C)+'</b>'],
+      ['− Total retourné au superviseur', fmtFcfa(R)],
+      ['= Net à justifier','<b>'+fmtFcfa(net)+'</b>'],
+      ['Dans la caisse (Fonds UV + FCFA)', fmtFcfa(caisse)],
+      ['Encore chez les PDV (pas encaissé)', fmtFcfa(chezPdv)],
+      ['Chez les commerciaux (encaissé, pas reversé)', fmtFcfa(chezComNonDeclare)],
+      ['Versements à confirmer', fmtFcfa(declaredPending)],
+      ['MANQUANT RÉEL','<b>'+fmtFcfa(manquant)+'</b>']
+    ]);
+    body+='<div style="margin-top:12px;font-size:12px"><b>Encaissé le '+esc(j.date||'')+' :</b><br>'+
+      'FCFA (paiements directs) : '+fmtFcfa(j.fcfa_direct)+' &nbsp;|&nbsp; FCFA (reçu des commerciaux) : '+fmtFcfa(j.fcfa_verse)+' &nbsp;|&nbsp; UV (retours) : '+fmtFcfa(j.uv)+'</div>';
+    body+=nonPointesReportHtml();
+    body+=signatureBlock('Le Master','Le Superviseur');
+    printReport(reportShell('Fiche de point — Master & Superviseur', body));
+  }
+
   /* ---------- MA CAISSE (arrêté de caisse : commercial & master) ---------- */
   function renderCaisse(){ return S.auth.user.role==='MASTER' ? renderCaisseMaster() : renderCaisseCommercial(); }
 
@@ -976,8 +1062,28 @@
         '<tr><td>Chez les commerciaux (encaissé, pas reversé)</td><td style="text-align:right">'+fmtFcfa(chezComNonDeclare)+' FCFA</td></tr>'+
         '<tr><td>Versements déclarés à confirmer</td><td style="text-align:right">'+fmtFcfa(declaredPending)+' FCFA</td></tr>'+
         '<tr style="border-top:2px solid var(--line)"><td><b>Manquant réel</b></td><td style="text-align:right"><b style="color:'+(manquant>0?'var(--red)':'var(--pos)')+'">'+fmtFcfa(manquant)+'</b> FCFA</td></tr>'+
-      '</tbody></table></div>'+verdict+'</div>';
-    return header+pointPanel+pendPanel+jourPanel+controlPanel;
+      '</tbody></table></div>'+verdict+
+      '<div style="padding:0 20px 16px"><button class="btn small" data-print-arrete type="button">🖨️ Imprimer mon arrêté (à faire signer par le superviseur)</button></div>'+
+      '</div>';
+    // Fiches de point du jour Master <-> Commercial (à imprimer et faire signer)
+    const pts=(c.point&&c.point.commerciaux)||[];
+    const fichesPanel='<div class="panel"><div class="panel-head"><h3>Fiches de point du jour — Master &amp; Commercial</h3><span class="hint">À imprimer et faire signer par chaque commercial</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Encaissé</th><th>Reversé</th><th>Reste</th><th>Fiche</th></tr></thead><tbody>'+
+      (pts.length?pts.map(function(cm,i){ const reste=cm.total-cm.total_remis;
+        return '<tr><td>'+esc(cm.commercial_nom)+(cm.zone_nom?' <span style="color:var(--ink-soft);font-size:11px">('+esc(cm.zone_nom)+')</span>':'')+'</td>'+
+          '<td><b>'+fmtFcfa(cm.total)+'</b> FCFA</td><td>'+fmtFcfa(cm.total_remis)+' FCFA</td><td>'+fmtFcfa(reste)+' FCFA</td>'+
+          '<td><button class="btn small" data-print-fiche="'+i+'" type="button">🖨️ Imprimer</button></td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="5">Aucune activité de commercial ce jour</td></tr>')+
+      '</tbody></table></div></div>';
+    // PDV non pointés (restant à recouvrer) + explication
+    const np=(c.point&&c.point.non_pointes)||[];
+    const npPanel=np.length?('<div class="panel"><div class="panel-head"><h3>PDV non pointés — restant à recouvrer</h3><span class="hint">Points non effectués : reportés automatiquement</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>Montant en attente</th></tr></thead><tbody>'+
+      np.map(function(n){return '<tr><td>'+esc(n.nom_commercial||n.pdv_username)+'</td><td><b>'+fmtFcfa(n.montant)+'</b> FCFA</td></tr>';}).join('')+
+      '</tbody></table></div>'+
+      '<div style="padding:10px 20px 14px;color:var(--ink-soft);font-size:11px;line-height:1.6">Un PDV qui n\'a pas pu faire son point reste « en attente » : le montant <b>n\'est pas compté comme reçu</b> et est <b>reporté automatiquement</b> au jour suivant jusqu\'au règlement. Rien n\'est perdu, et il apparaît sur tes fiches comme « restant à recouvrer ».</div>'+
+      '</div>'):'';
+    return header+pointPanel+fichesPanel+npPanel+pendPanel+jourPanel+controlPanel;
   }
 
   /* ---------- COMMERCIAL : recouvrement du cash chez les PDV de sa zone ---------- */
@@ -1778,6 +1884,13 @@
         S.masterCaisse=await api('/master/caisse'+(S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'')); renderView();
         dlgSuccess('Versement rejeté','Le commercial a été notifié, l\'argent est de nouveau en main.');
       }catch(err){ b.disabled=false; b.textContent='Rejeter'; dlgError('Erreur',err.message); }
+    }));
+    const pArrete=document.querySelector('[data-print-arrete]');
+    if(pArrete) pArrete.addEventListener('click', printArreteMaster);
+    document.querySelectorAll('[data-print-fiche]').forEach(b=>b.addEventListener('click', ()=>{
+      const idx=Number(b.dataset.printFiche);
+      const list=(S.masterCaisse&&S.masterCaisse.point&&S.masterCaisse.point.commerciaux)||[];
+      if(list[idx]) printFicheCommercial(list[idx]);
     }));
     const cRetry=document.querySelector('[data-caisse-retry]');
     if(cRetry) cRetry.addEventListener('click', ()=>{ loadView('caisse').then(renderView); });
