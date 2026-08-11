@@ -315,9 +315,10 @@ app.get('/health', wrap(async (req, res) => {
 
 // Contrôle de version : permet de vérifier que la dernière version tourne bien
 app.get('/version', wrap(async (req, res) => {
-  let hasGam = false;
+  let hasGam = false, hasRachats = false;
   try { await pool.query('SELECT 1 FROM gam_versements LIMIT 1'); hasGam = true; } catch (e) { hasGam = false; }
-  res.json({ version: 'caisse-2026-08-gam_versements', table_versements: 'gam_versements', table_prete: hasGam });
+  try { await pool.query('SELECT 1 FROM gam_rachats_uv LIMIT 1'); hasRachats = true; } catch (e) { hasRachats = false; }
+  res.json({ version: 'gam-2026-08-retours-reseaux-v3', table_prete: hasGam, rachats_prets: hasRachats });
 }));
 
 // Connexion (public) — verrouillage anti-force brute PERSISTANT (en base)
