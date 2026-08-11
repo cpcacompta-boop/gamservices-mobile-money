@@ -1690,7 +1690,7 @@
       const masterActions = (isSupOwner && u.role==='MASTER')
         ? '<div class="form-actions" style="justify-content:flex-start;gap:8px">'+
             '<button type="button" class="btn small" data-creditmaster="'+u.id+'">+ Créditer le fonds</button>'+
-            '<button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-mastercredits="'+u.id+'">Historique des versements</button>'+
+            '<button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-mastercredits="'+u.id+'">Historique des mouvements</button>'+
             '<button type="button" class="btn small" style="background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)" data-masterhistory="'+u.id+'">Historique des recharges</button>'+
           '</div>' : '';
       $('modal').innerHTML='<div class="modal-head"><h3>'+esc(disp)+'</h3><button class="x" data-close>✕</button></div>'+
@@ -1791,14 +1791,49 @@
 
   /* ---------- SUPERVISEUR : historique des versements (crédits) accordés à un Master ---------- */
   async function openMasterCredits(id, dispName){
-    $('modal').innerHTML='<div class="modal-head"><h3>Versements — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
+    $('modal').innerHTML='<div class="modal-head"><h3>Historique des mouvements — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
       '<div class="modal-body"><div style="padding:10px 0;color:var(--ink-soft);font-size:11px">Chargement…</div></div>';
     $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
     $('overlay').classList.add('open');
     try{
-      const list=await api('/users/'+id+'/credits');
-      $('modal').querySelector('.modal-body').innerHTML=renderCreditTable(list);
+      const list=await api('/masters/'+id+'/mouvements');
+      $('modal').querySelector('.modal-body').innerHTML=renderMouvementsTable(list);
     }catch(err){ $('modal').querySelector('.modal-body').innerHTML='<div class="msg err" style="padding:10px 0">'+esc(err.message)+'</div>'; }
+  }
+
+  // Historique unifié : chaque mouvement (crédit/retrait) éclaté en lignes UV et Espèces, avec réseau, sens, date
+  function renderMouvementsTable(list){
+    list=list||[];
+    const lignes=[];
+    list.forEach(function(m){
+      const credit=m.sens==='CREDIT';
+      const par=m.par_role==='MASTER'?' (par le Master)':(m.par_role==='SUPERVISEUR'?' (par le superviseur)':'');
+      if(Number(m.uv||0)>0){
+        lignes.push({date:m.created_at, credit:credit, nature:'UV', reseau:m.reseau_nom||'—', montant:Number(m.uv), unite:'UV', par:par});
+      }
+      if(Number(m.fcfa||0)>0){
+        lignes.push({date:m.created_at, credit:credit, nature:'Espèces', reseau:'—', montant:Number(m.fcfa), unite:'FCFA', par:par});
+      }
+    });
+    if(!lignes.length) return '<div style="padding:16px 0;color:var(--ink-soft);font-size:12px;text-align:center">Aucun mouvement de fonds pour ce Master.</div>';
+    const rows=lignes.map(function(l){
+      const sens=l.credit
+        ? '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Crédité ↑</span>'
+        : '<span class="pill" style="background:var(--red-soft);color:var(--red)">Retiré ↓</span>';
+      const nat=l.nature==='UV'
+        ? '<span class="pill" style="background:rgba(200,155,60,.18);color:var(--gold)">UV</span>'
+        : '<span class="pill" style="background:var(--surface-2);color:var(--ink-soft)">Espèces</span>';
+      const sign=l.credit?'+':'−';
+      const col=l.credit?'var(--pos)':'var(--red)';
+      return '<tr>'+
+        '<td style="font-size:11px;color:var(--ink-soft);white-space:nowrap">'+fmtDateTime(l.date)+'</td>'+
+        '<td>'+sens+'</td>'+
+        '<td>'+nat+'</td>'+
+        '<td>'+esc(l.reseau)+'</td>'+
+        '<td style="text-align:right;white-space:nowrap"><b style="color:'+col+'">'+sign+fmtFcfa(l.montant)+'</b> '+l.unite+'</td>'+
+      '</tr>';
+    }).join('');
+    return '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Sens</th><th>Nature</th><th>Réseau</th><th style="text-align:right">Montant</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   }
 
   /* ---------- SUPERVISEUR : historique des recharges d'un Master ---------- */
@@ -2369,6 +2404,7 @@
   }
   function stopLocationTracking(){ if(geoWatchId!==null){ try{ navigator.geolocation.clearWatch(geoWatchId); }catch(e){} geoWatchId=null; } }
   function mapLink(lat,lng){ if(lat==null||lng==null) return '<span style="color:var(--ink-faint)">Position inconnue</span>'; return '<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q='+lat+','+lng+'">'+lat.toFixed(5)+', '+lng.toFixed(5)+' — voir sur la carte</a>'; }
+  function fmtDateTime(iso){ if(!iso) return '—'; try{ const d=new Date(iso); return d.toLocaleDateString('fr-FR')+' '+d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); }catch(e){ return '—'; } }
   function timeAgo(iso){ if(!iso) return '—'; const s=Math.floor((Date.now()-new Date(iso).getTime())/1000); if(s<60) return 'à l\'instant'; if(s<3600) return 'il y a '+Math.floor(s/60)+' min'; if(s<86400) return 'il y a '+Math.floor(s/3600)+' h'; return 'il y a '+Math.floor(s/86400)+' j'; }
 
   /* ---------- RECHARGES UV : helpers d'affichage partagés (Master + Superviseur) ---------- */
