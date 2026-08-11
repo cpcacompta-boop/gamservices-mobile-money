@@ -644,14 +644,15 @@
     recouvrement:'<path d="M21 12V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9"/><path d="M3 10h18"/><path d="M16.5 17.5l2 2 3.5-3.5"/>',
     caisse:'<path d="M4 9h16l-1 10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/><circle cx="12" cy="14" r="1.6"/>',
     rapports:'<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6M9 9h2"/>',
-    reseaux:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'
+    reseaux:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    retours:'<path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Rechargement'},{id:'retours',label:'Retours'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'reseaux',label:'Réseaux'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','retours','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -663,7 +664,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Rechargement', retours:'Retours', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -709,8 +710,14 @@
     if(v==='dashboard' && S.auth.user.role==='MASTER'){
       try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){ S.masterReseaux=S.masterReseaux||{reseaux:[],total:0}; }
     }
+    if(v==='retours' && S.auth.user.role==='MASTER'){
+      await loadMasterData();
+      try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){ S.masterReseaux=S.masterReseaux||{reseaux:[],total:0}; }
+      try{ S.pdvs=await api('/pdvs'); }catch(e){ S.pdvs=S.pdvs||[]; }
+      try{ S.rachats=await api('/master/rachats'); }catch(e){ S.rachats=S.rachats||[]; }
+    }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,retours:renderRetours,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -1263,6 +1270,71 @@
       '</table></div></div>';
   }
 
+  /* ---------- RETOURS (Master) : le PDV rend de l'UV par réseau ---------- */
+  // Dialogue de choix du réseau (avec solde dispo) — résout l'id ou null
+  function askReseau(opts){
+    opts=opts||{};
+    const list=((S.masterReseaux&&S.masterReseaux.reseaux)||[]).filter(function(r){return r.actif || r.solde_uv>0;});
+    return new Promise(resolve=>{
+      const ov=$('dlg-overlay');
+      const opestr='<option value="">— choisir le réseau —</option>'+list.map(function(r){return '<option value="'+r.id+'">'+esc(r.nom)+' (dispo : '+fmtUv(r.solde_uv)+' UV)</option>';}).join('');
+      ov.innerHTML='<div class="dlg-box dlg-type-info" role="alertdialog" aria-modal="true">'+
+        '<button class="dlg-x" data-ar-close type="button" aria-label="Fermer">&#10005;</button>'+
+        '<div class="dlg-icon info">'+DLG_ICONS.info+'</div>'+
+        '<h3 class="dlg-title">'+esc(opts.title||'Sur quel réseau ?')+'</h3>'+
+        (opts.message?'<p class="dlg-msg">'+esc(opts.message)+'</p>':'')+
+        '<select data-ar-sel style="width:100%;margin:8px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:13px">'+opestr+'</select>'+
+        '<div class="dlg-actions"><button class="dlg-cancel" data-ar-cancel type="button">Annuler</button><button class="dlg-ok info" data-ar-ok type="button">Valider</button></div>'+
+      '</div>';
+      ov.classList.add('open'); document.body.classList.add('dlg-lock');
+      const sel=ov.querySelector('[data-ar-sel]');
+      let closed=false;
+      const close=(val)=>{ if(closed)return; closed=true; ov.classList.remove('open'); ov.innerHTML=''; document.body.classList.remove('dlg-lock'); resolve(val); };
+      ov.querySelector('[data-ar-ok]').addEventListener('click',()=>{ const v=sel&&sel.value?Number(sel.value):null; if(!v){ sel.style.borderColor='var(--red)'; return; } close(v); });
+      ov.querySelector('[data-ar-cancel]').addEventListener('click',()=>close(null));
+      const xc=ov.querySelector('[data-ar-close]'); if(xc) xc.addEventListener('click',()=>close(null));
+    });
+  }
+
+  function renderRetours(){
+    const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
+    const pending=(S.recharges||[]).filter(function(rc){return rc.statut==='EN_ATTENTE';});
+    const pdvs=S.pdvs||[];
+    const rachats=S.rachats||[];
+    const header=`<div class="welcome"><h2>Retours ↩️</h2><p>Quand un PDV te rend de l'UV (par réseau). Deux cas : solder une recharge en attente, ou racheter de l'UV en cash.</p></div>`;
+    const stats=`<div class="stat-row">
+      <div class="stat gold"><div class="lbl">Fonds UV total</div><div class="num">${fmtUv(fund.solde_uv)}</div></div>
+      <div class="stat"><div class="lbl">Fonds FCFA (pour rachat)</div><div class="num">${fmtFcfa(fund.solde_fcfa)}</div></div>
+    </div>`+renderReseauxSolde();
+    // Cas 1 : solder une recharge en attente par retour d'UV
+    const rows=pending.length?pending.map(function(rc){
+      const pdv=rc.nom_commercial||rc.pdv_username||'—';
+      return '<tr><td>'+esc(pdv)+'</td><td><b>'+fmtUv(rc.montant_fcfa)+'</b> UV</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(rc.created_at)+'</td>'+
+        '<td><button class="btn small" data-retour-solder="'+rc.id+'" data-amount="'+esc(fmtUv(rc.montant_fcfa))+'" data-pdv="'+esc(pdv)+'">Retour UV</button></td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="4">Aucune recharge en attente</td></tr>';
+    const casA='<div class="panel"><div class="panel-head"><h3>Retour sur une recharge en attente</h3><span class="hint">Le PDV n\'a pas de cash : il rend de l\'UV pour solder sa recharge</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>Montant dû</th><th>Depuis</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    // Cas 2 : rachat libre d'UV
+    const pdvOpts='<option value="">— PDV (facultatif) —</option>'+pdvs.map(function(p){var nm=p.nom_commercial||p.username;return '<option value="'+p.id+'">'+esc(nm)+'</option>';}).join('');
+    const casB='<div class="panel"><div class="panel-head"><h3>Rachat libre d\'UV</h3><span class="hint">Le PDV n\'a pas de dette : il te donne de l\'UV, tu le paies en FCFA</span></div>'+
+      '<form data-form-rachat><div class="form-grid">'+
+        '<div class="field span2"><label>Point de vente</label><select name="pdv_id">'+pdvOpts+'</select></div>'+
+        '<div class="field"><label>Réseau (où le PDV rend l\'UV)</label><select name="reseau_id" required>'+masterReseauOptions()+'</select></div>'+
+        '<div class="field"><label>Montant d\'UV racheté</label><input name="montant" type="number" min="0.01" step="any" required placeholder="ex : 20000"></div>'+
+      '</div>'+
+      '<div style="padding:0 20px 6px;color:var(--ink-soft);font-size:11px">Effet : le solde UV du réseau <b>monte</b> et ton fonds FCFA <b>baisse</b> du même montant (1 UV = 1 FCFA). Bloqué si ton FCFA est insuffisant.</div>'+
+      '<div class="msg" data-msg></div>'+
+      '<div class="form-actions"><button class="btn" type="submit">Enregistrer le rachat</button></div>'+
+      '</form></div>';
+    // Historique des rachats
+    const rachRows=rachats.length?rachats.map(function(ra){
+      var pdv=ra.nom_commercial||ra.pdv_username||'—';
+      return '<tr><td>'+esc(pdv)+'</td><td><b>'+fmtUv(ra.montant)+'</b> UV</td><td>'+esc(ra.reseau_nom||'—')+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(ra.created_at)+'</td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="4">Aucun rachat pour le moment</td></tr>';
+    const histo='<div class="panel"><div class="panel-head"><h3>Historique des rachats d\'UV</h3></div><div class="table-wrap"><table><thead><tr><th>PDV</th><th>Montant</th><th>Réseau</th><th>Date</th></tr></thead><tbody>'+rachRows+'</tbody></table></div></div>';
+    return header+stats+casA+casB+histo;
+  }
+
   function renderRecharges(){
     const fund=S.masterFund||{solde_uv:0,solde_fcfa:0,total_credite:0,total_retourne:0,fonds_total:0,en_circulation:0,manquant:0};
     const pdvs=S.pdvs||[];
@@ -1314,14 +1386,7 @@
             <div class="field"><label data-rc-eq-label>Équivalent en FCFA (1 UV = 1 FCFA)</label><input data-rc-fcfa type="number" readonly tabindex="-1" style="background:var(--surface-2);color:var(--ink-soft)" placeholder="calculé automatiquement"></div>
             <div class="field span2" style="flex-direction:row;align-items:center;gap:8px;display:flex">
               <input type="checkbox" name="paid_now" id="paid_now" style="width:auto">
-              <label for="paid_now" style="margin:0" data-rc-paid-label>Le PDV a déjà payé (encaissement immédiat)</label>
-            </div>
-            <div class="field span2" data-rc-mode-wrap style="display:none">
-              <label>Le PDV règle en…</label>
-              <select name="mode_paiement" data-rc-mode>
-                <option value="FCFA">💵 Espèces (FCFA) — mon fonds FCFA augmente</option>
-                <option value="UV">🔁 Retour (UV) — le PDV rend de l'UV, mon fonds UV augmente</option>
-              </select>
+              <label for="paid_now" style="margin:0" data-rc-paid-label>Le PDV a déjà payé en espèces (encaissement immédiat)</label>
             </div>
           </div>
           <div style="padding:0 20px 6px;color:var(--ink-soft);font-size:11px" data-rc-hint>Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée — même jour ou plus tard.</div>
@@ -1935,17 +2000,41 @@
       });
     }
     document.querySelectorAll('[data-payrecharge]').forEach(b=>b.addEventListener('click', async ()=>{
-      const mode=await askPaymentMode();
-      if(!mode) return; b.disabled=true; b.textContent='…';
+      const ok=await dlgConfirm('Encaisser en espèces ?','Confirme que le PDV a payé cette recharge en CASH (FCFA). Ton fonds FCFA sera crédité.\n\n(Si le PDV rend de l\'UV, va plutôt dans la page « Retours ».)',{type:'success',okText:'Oui, payé en espèces'});
+      if(!ok) return; b.disabled=true; b.textContent='…';
       try{
-        await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode_paiement:mode})});
+        await api('/master/recharges/'+b.dataset.payrecharge+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode_paiement:'FCFA'})});
         await loadMasterData(); renderView();
-        dlgSuccess('Règlement enregistré', mode==='UV'
-          ? 'Le PDV a rendu de l\'UV : ton fonds UV a été augmenté du montant.'
-          : 'Le PDV a payé en espèces : ton fonds FCFA a été augmenté du montant.');
+        dlgSuccess('Règlement enregistré', 'Le PDV a payé en espèces : ton fonds FCFA a été crédité.');
       }
       catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
     }));
+    // ---- Retours (Master) : Cas 1 solder une recharge en UV ----
+    document.querySelectorAll('[data-retour-solder]').forEach(b=>b.addEventListener('click', async ()=>{
+      const rid=await askReseau({title:'Retour d\'UV',message:'Sur quel réseau le PDV rend-il les '+b.dataset.amount+' UV (pour '+b.dataset.pdv+') ?'});
+      if(!rid) return; b.disabled=true; b.textContent='…';
+      try{
+        await api('/master/recharges/'+b.dataset.retourSolder+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode_paiement:'UV',reseau_id:rid})});
+        await loadMasterData(); try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){} renderView();
+        dlgSuccess('Retour enregistré', 'La recharge est soldée et l\'UV est revenu sur le réseau choisi.');
+      }catch(err){ b.disabled=false; b.textContent='Retour UV'; dlgError('Erreur', err.message); }
+    }));
+    // ---- Retours (Master) : Cas 2 rachat libre d'UV ----
+    const rachf=document.querySelector('form[data-form-rachat]');
+    if(rachf) rachf.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg=rachf.querySelector('[data-msg]'); const d=Object.fromEntries(new FormData(rachf).entries());
+      if(!d.reseau_id){ msg.textContent='✘ Choisis le réseau'; msg.className='msg err'; return; }
+      if(!d.montant||Number(d.montant)<=0){ msg.textContent='✘ Indique le montant'; msg.className='msg err'; return; }
+      const ok=await dlgConfirm('Confirmer le rachat ?','Tu rachètes '+fmtUv(d.montant)+' UV au PDV → tu lui paies '+fmtFcfa(d.montant)+' FCFA en cash. Ton fonds FCFA baissera d\'autant.',{type:'warn',okText:'Oui, je rachète'});
+      if(!ok) return; msg.textContent='Enregistrement…'; msg.className='msg';
+      const btn=rachf.querySelector('button[type=submit]'); btn.disabled=true;
+      try{
+        await api('/master/rachat-uv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        await loadMasterData(); try{ S.masterReseaux=await api('/master/reseaux'); S.rachats=await api('/master/rachats'); }catch(e){} renderView();
+        dlgSuccess('Rachat enregistré', 'Le solde UV du réseau a monté et ton fonds FCFA a baissé du montant.');
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+    });
     const retf=document.querySelector('form[data-form-return]');
     if(retf){ retf.addEventListener('submit', async (e)=>{
       e.preventDefault();
