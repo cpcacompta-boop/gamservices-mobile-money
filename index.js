@@ -228,6 +228,41 @@ async function ensureCaisseSchema() {
   }
 }
 
+// Schéma & données des RÉSEAUX (Wave, Orange Money, Moov Money, Djamo…) + solde UV par réseau
+async function ensureReseaux() {
+  const stmts = [
+    "CREATE TABLE IF NOT EXISTS gam_reseaux (id SERIAL PRIMARY KEY, nom TEXT NOT NULL, actif BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT now())",
+    "CREATE UNIQUE INDEX IF NOT EXISTS gam_reseaux_nom ON gam_reseaux(lower(nom))",
+    "CREATE TABLE IF NOT EXISTS gam_solde_reseau (id SERIAL PRIMARY KEY, master_id INTEGER, reseau_id INTEGER, solde_uv NUMERIC NOT NULL DEFAULT 0)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS gam_solde_reseau_uniq ON gam_solde_reseau(master_id, reseau_id)",
+    "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
+    "ALTER TABLE fund_credits ADD COLUMN IF NOT EXISTS reseau_id INTEGER"
+  ];
+  for (const s of stmts) { try { await pool.query(s); } catch (e) { console.error('ensureReseaux:', e.message); } }
+  // Seed des réseaux courants si la table est vide
+  try {
+    const c = await pool.query('SELECT COUNT(*)::int n FROM gam_reseaux');
+    if (c.rows[0].n === 0) {
+      for (const nom of ['Wave', 'Orange Money', 'Moov Money', 'Djamo']) {
+        await pool.query('INSERT INTO gam_reseaux (nom) VALUES ($1) ON CONFLICT DO NOTHING', [nom]);
+      }
+    }
+  } catch (e) { console.error('seed reseaux:', e.message); }
+  // Reprise de l'ancien solde UV global (sans réseau) vers un réseau "Ancien solde" — idempotent
+  try {
+    const leg = await pool.query("SELECT 1 FROM users WHERE role='MASTER' AND solde_uv>0 AND NOT EXISTS (SELECT 1 FROM gam_solde_reseau s WHERE s.master_id=users.id) LIMIT 1");
+    if (leg.rows.length) {
+      let anc = await pool.query("SELECT id FROM gam_reseaux WHERE lower(nom)=lower($1)", ['Ancien solde']);
+      if (!anc.rows.length) anc = await pool.query("INSERT INTO gam_reseaux (nom) VALUES ('Ancien solde') RETURNING id");
+      await pool.query(
+        `INSERT INTO gam_solde_reseau (master_id, reseau_id, solde_uv)
+         SELECT u.id, $1, u.solde_uv FROM users u
+         WHERE u.role='MASTER' AND u.solde_uv>0 AND NOT EXISTS (SELECT 1 FROM gam_solde_reseau s WHERE s.master_id=u.id)`,
+        [anc.rows[0].id]);
+    }
+  } catch (e) { console.error('reprise ancien solde UV:', e.message); }
+}
+
 /* =====================================================================
    HELPERS
    ===================================================================== */
@@ -504,7 +539,10 @@ app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const paidNow = !!req.body.paid_now;
   // Mode de règlement (uniquement si payé tout de suite) : 'FCFA' (cash) ou 'UV' (retour d'UV). Défaut : FCFA.
   const modePaiement = paidNow ? (req.body.mode_paiement === 'UV' ? 'UV' : 'FCFA') : null;
+  // Réseau de l'UV (Wave, Orange…) : obligatoire pour une recharge de type UV
+  const reseauId = typeFonds === 'UV' ? (Number(req.body.reseau_id) || null) : null;
   if (!pdvId || !(montant > 0)) return res.status(400).json({ error: 'Le point de vente et le montant sont obligatoires' });
+  if (typeFonds === 'UV' && !reseauId) return res.status(400).json({ error: 'Choisis le réseau (Wave, Orange…) pour cette recharge UV' });
 
   const pdv = await pool.query("SELECT id FROM users WHERE id=$1 AND role='PDV' AND actif=TRUE", [pdvId]);
   if (!pdv.rows.length) return res.status(404).json({ error: 'Point de vente introuvable' });
@@ -514,6 +552,15 @@ app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const soldeFcfa = Number(m.rows[0].solde_fcfa || 0);
   if (typeFonds === 'UV' && soldeUv < montant) return res.status(400).json({ error: 'Fonds UV insuffisant (solde disponible : ' + soldeUv + ')' });
   if (typeFonds === 'FCFA' && soldeFcfa < montant) return res.status(400).json({ error: 'Fonds FCFA insuffisant (solde disponible : ' + soldeFcfa + ')' });
+  // Garde par réseau : on ne peut pas vendre de l'UV qu'on n'a pas sur CE réseau
+  if (typeFonds === 'UV') {
+    const b = await pool.query('SELECT solde_uv FROM gam_solde_reseau WHERE master_id=$1 AND reseau_id=$2', [req.user.id, reseauId]);
+    const bal = b.rows.length ? Number(b.rows[0].solde_uv) : 0;
+    if (bal < montant) {
+      const rn = await pool.query('SELECT nom FROM gam_reseaux WHERE id=$1', [reseauId]);
+      return res.status(400).json({ error: 'UV insuffisant sur ' + (rn.rows[0] ? rn.rows[0].nom : 'ce réseau') + ' (disponible : ' + bal + ')' });
+    }
+  }
 
   // Colonnes de traçabilité : montant_uv reste rempli pour l'UV (0 pour une avance FCFA directe),
   // montant_fcfa porte toujours le montant dû/avancé en FCFA (1 UV = 1 FCFA).
@@ -524,9 +571,9 @@ app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const reglePar = paidNow ? req.user.id : null;
   const reglementRole = paidNow ? 'MASTER' : null;
   const r = await pool.query(
-    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, type_fonds, mode_paiement, regle_par, regle_par_role, paid_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
-    [req.user.id, pdvId, montantUvCol, montantFcfaCol, statut, typeFonds, modePaiement, reglePar, reglementRole]);
+    `INSERT INTO uv_recharges (master_id, pdv_id, montant_uv, montant_fcfa, statut, type_fonds, mode_paiement, regle_par, regle_par_role, reseau_id, paid_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,${paidNow ? 'now()' : 'NULL'}) RETURNING *`,
+    [req.user.id, pdvId, montantUvCol, montantFcfaCol, statut, typeFonds, modePaiement, reglePar, reglementRole, reseauId]);
 
   // ---- Mise à jour du fonds : modèle unifié (débit selon le type, crédit selon le mode) ----
   // DÉBIT (ce que le Master donne au PDV), toujours au moment de la recharge :
@@ -542,6 +589,10 @@ app.post('/master/recharges', requireRole('MASTER'), wrap(async (req, res) => {
   const fund = await pool.query(
     'UPDATE users SET solde_uv=solde_uv+$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
     [deltaUv, deltaFcfa, req.user.id]);
+  // Le solde du réseau suit exactement le delta UV (débit à la vente, re-crédit si retour immédiat)
+  if (reseauId && deltaUv !== 0) {
+    await pool.query('UPDATE gam_solde_reseau SET solde_uv=solde_uv+$1 WHERE master_id=$2 AND reseau_id=$3', [deltaUv, req.user.id, reseauId]);
+  }
 
   broadcastToSupervisors({ type: 'recharge_created', masterId: req.user.id, recharge: r.rows[0] });
   res.json({ ok: true, recharge: r.rows[0], fund: fund.rows[0] });
@@ -563,6 +614,10 @@ app.post('/master/recharges/:id/pay', requireRole('MASTER'), wrap(async (req, re
   const fund = modePaiement === 'UV'
     ? await pool.query('UPDATE users SET solde_uv=solde_uv+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id])
     : await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
+  // Retour d'UV : l'UV revient sur le réseau d'origine de la recharge
+  if (modePaiement === 'UV' && rc.rows[0].reseau_id) {
+    await pool.query('UPDATE gam_solde_reseau SET solde_uv=solde_uv+$1 WHERE master_id=$2 AND reseau_id=$3', [montant, req.user.id, rc.rows[0].reseau_id]);
+  }
   broadcastToSupervisors({ type: 'recharge_paid', masterId: req.user.id, id: Number(req.params.id), mode_paiement: modePaiement });
   res.json({ ok: true, fund: fund.rows[0] });
 }));
@@ -964,27 +1019,102 @@ app.post('/master/reports/close', requireRole('MASTER'), wrap(async (req, res) =
 app.post('/users/:id/credit', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const uv = numOrNaN(req.body.uv) || 0;
   const fcfa = numOrNaN(req.body.fcfa) || 0;
+  const reseauId = uv > 0 ? (Number(req.body.reseau_id) || null) : null;
   if (!(uv > 0) && !(fcfa > 0)) return res.status(400).json({ error: 'Indique un montant en UV et/ou en FCFA' });
+  if (uv > 0 && !reseauId) return res.status(400).json({ error: 'Choisis le réseau (Wave, Orange…) pour créditer de l\'UV' });
   const t = await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id]);
   if (!t.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
   if (t.rows[0].role !== 'MASTER') return res.status(400).json({ error: 'Seul un compte Master peut être crédité en UV/FCFA' });
+  if (uv > 0 && reseauId) {
+    await pool.query(
+      `INSERT INTO gam_solde_reseau (master_id, reseau_id, solde_uv) VALUES ($1,$2,$3)
+       ON CONFLICT (master_id, reseau_id) DO UPDATE SET solde_uv = gam_solde_reseau.solde_uv + $3`,
+      [req.params.id, reseauId, uv]);
+  }
   const r = await pool.query('UPDATE users SET solde_uv=solde_uv+$1, solde_fcfa=solde_fcfa+$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
     [uv, fcfa, req.params.id]);
-  await pool.query('INSERT INTO fund_credits (master_id, uv, fcfa) VALUES ($1,$2,$3)', [req.params.id, uv, fcfa]);
+  await pool.query('INSERT INTO fund_credits (master_id, uv, fcfa, reseau_id) VALUES ($1,$2,$3,$4)', [req.params.id, uv, fcfa, reseauId]);
   sendToUser(req.params.id, { type: 'fund_credited', fund: r.rows[0], uv, fcfa });
   res.json({ ok: true, fund: r.rows[0] });
+}));
+
+/* ---- RÉSEAUX (Wave, Orange Money, Moov Money, Djamo…) : gérés par le superviseur ---- */
+
+// Liste des réseaux (tous pour le superviseur ; les actifs suffisent au Master)
+app.get('/reseaux', requireRole('SUPERVISEUR', 'MASTER'), wrap(async (req, res) => {
+  const r = await pool.query('SELECT id, nom, actif FROM gam_reseaux ORDER BY actif DESC, nom');
+  res.json(r.rows);
+}));
+
+// Ajouter un réseau
+app.post('/reseaux', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const nom = String(req.body.nom || '').trim();
+  if (!nom) return res.status(400).json({ error: 'Nom du réseau obligatoire' });
+  try {
+    const r = await pool.query('INSERT INTO gam_reseaux (nom) VALUES ($1) RETURNING id, nom, actif', [nom]);
+    res.json({ ok: true, reseau: r.rows[0] });
+  } catch (e) {
+    res.status(400).json({ error: 'Ce réseau existe déjà' });
+  }
+}));
+
+// Renommer / activer / désactiver un réseau
+app.patch('/reseaux/:id', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const fields = [], vals = [];
+  if (typeof req.body.nom === 'string' && req.body.nom.trim()) { fields.push('nom=$' + (vals.length + 1)); vals.push(req.body.nom.trim()); }
+  if (typeof req.body.actif === 'boolean') { fields.push('actif=$' + (vals.length + 1)); vals.push(req.body.actif); }
+  if (!fields.length) return res.status(400).json({ error: 'Rien à modifier' });
+  vals.push(req.params.id);
+  const r = await pool.query('UPDATE gam_reseaux SET ' + fields.join(', ') + ' WHERE id=$' + vals.length + ' RETURNING id, nom, actif', vals);
+  if (!r.rows.length) return res.status(404).json({ error: 'Réseau introuvable' });
+  res.json({ ok: true, reseau: r.rows[0] });
+}));
+
+// Solde UV par réseau d'un Master (superviseur) — pour le formulaire de crédit
+app.get('/users/:id/reseaux', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT rs.id, rs.nom, rs.actif, COALESCE(s.solde_uv,0) AS solde_uv
+     FROM gam_reseaux rs
+     LEFT JOIN gam_solde_reseau s ON s.reseau_id=rs.id AND s.master_id=$1
+     WHERE rs.actif=TRUE OR COALESCE(s.solde_uv,0) <> 0
+     ORDER BY rs.nom`, [req.params.id]);
+  const reseaux = r.rows.map(x => ({ id: x.id, nom: x.nom, actif: x.actif, solde_uv: Number(x.solde_uv) }));
+  res.json({ reseaux, total: reseaux.reduce((a, x) => a + x.solde_uv, 0) });
+}));
+
+// Solde UV par réseau du Master connecté (+ total) — pour la recharge et le tableau de bord
+app.get('/master/reseaux', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT rs.id, rs.nom, rs.actif, COALESCE(s.solde_uv,0) AS solde_uv
+     FROM gam_reseaux rs
+     LEFT JOIN gam_solde_reseau s ON s.reseau_id=rs.id AND s.master_id=$1
+     WHERE rs.actif=TRUE OR COALESCE(s.solde_uv,0) <> 0
+     ORDER BY rs.nom`, [req.user.id]);
+  const reseaux = r.rows.map(x => ({ id: x.id, nom: x.nom, actif: x.actif, solde_uv: Number(x.solde_uv) }));
+  res.json({ reseaux, total: reseaux.reduce((a, x) => a + x.solde_uv, 0) });
 }));
 
 // Le superviseur retire lui-même de l'UV et/ou du FCFA du fonds d'un Master (retour de fonds)
 app.post('/users/:id/return', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const uv = numOrNaN(req.body.uv) || 0;
   const fcfa = numOrNaN(req.body.fcfa) || 0;
+  const reseauId = uv > 0 ? (Number(req.body.reseau_id) || null) : null;
   if (!(uv > 0) && !(fcfa > 0)) return res.status(400).json({ error: 'Indique un montant en UV et/ou en FCFA à retirer' });
+  if (uv > 0 && !reseauId) return res.status(400).json({ error: 'Choisis le réseau pour retirer de l\'UV' });
   const t = await pool.query('SELECT role, solde_uv, solde_fcfa FROM users WHERE id=$1', [req.params.id]);
   if (!t.rows.length) return res.status(404).json({ error: 'Compte introuvable' });
   if (t.rows[0].role !== 'MASTER') return res.status(400).json({ error: 'Seul un compte Master peut faire l\'objet d\'un retour de fonds' });
   if (uv > Number(t.rows[0].solde_uv)) return res.status(400).json({ error: 'Ce Master n\'a que ' + t.rows[0].solde_uv + ' UV disponible' });
   if (fcfa > Number(t.rows[0].solde_fcfa)) return res.status(400).json({ error: 'Ce Master n\'a que ' + t.rows[0].solde_fcfa + ' FCFA encaissé' });
+  if (uv > 0 && reseauId) {
+    const b = await pool.query('SELECT solde_uv FROM gam_solde_reseau WHERE master_id=$1 AND reseau_id=$2', [req.params.id, reseauId]);
+    const bal = b.rows.length ? Number(b.rows[0].solde_uv) : 0;
+    if (uv > bal) {
+      const rn = await pool.query('SELECT nom FROM gam_reseaux WHERE id=$1', [reseauId]);
+      return res.status(400).json({ error: 'Ce Master n\'a que ' + bal + ' UV sur ' + (rn.rows[0] ? rn.rows[0].nom : 'ce réseau') });
+    }
+    await pool.query('UPDATE gam_solde_reseau SET solde_uv=solde_uv-$1 WHERE master_id=$2 AND reseau_id=$3', [uv, req.params.id, reseauId]);
+  }
   const r = await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa-$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
     [uv, fcfa, req.params.id]);
   const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role) VALUES ($1,$2,$3,$4,$5) RETURNING *',
@@ -1243,6 +1373,7 @@ setInterval(() => {
 migrate()
   .then(async () => {
     await ensureCaisseSchema();
+    await ensureReseaux();
     server.listen(PORT, () => {
       console.log('\u2714 GAMServices demarre (HTTP + WebSocket) sur le port ' + PORT);
       checkOverdueRecharges();                          // vérif immédiate au démarrage
@@ -1252,5 +1383,6 @@ migrate()
   .catch(async err => {
     console.error('\u2718 Echec migration au demarrage :', err.message);
     await ensureCaisseSchema(); // on garantit quand même le schéma caisse
+    await ensureReseaux();
     server.listen(PORT, () => console.log('\u26a0 Serveur demarre (migration en erreur) port ' + PORT));
   });
