@@ -237,6 +237,7 @@ async function ensureReseaux() {
     "CREATE UNIQUE INDEX IF NOT EXISTS gam_solde_reseau_uniq ON gam_solde_reseau(master_id, reseau_id)",
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
     "ALTER TABLE fund_credits ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
+    "ALTER TABLE fund_returns ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
     "CREATE TABLE IF NOT EXISTS gam_rachats_uv (id SERIAL PRIMARY KEY, master_id INTEGER, pdv_id INTEGER, reseau_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now())"
   ];
   for (const s of stmts) { try { await pool.query(s); } catch (e) { console.error('ensureReseaux:', e.message); } }
@@ -655,8 +656,8 @@ app.post('/master/returns', requireRole('MASTER'), wrap(async (req, res) => {
   }
   const fund = await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa-$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
     [uv, fcfa, req.user.id]);
-  const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role) VALUES ($1,$2,$3,$1,$4) RETURNING *',
-    [req.user.id, uv, fcfa, 'MASTER']);
+  const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role, reseau_id) VALUES ($1,$2,$3,$1,$4,$5) RETURNING *',
+    [req.user.id, uv, fcfa, 'MASTER', reseauId]);
   broadcastToSupervisors({ type: 'fund_return_created', masterId: req.user.id, ret: ret.rows[0] });
   res.json({ ok: true, fund: fund.rows[0], ret: ret.rows[0] });
 }));
@@ -1161,8 +1162,8 @@ app.post('/users/:id/return', requireRole('SUPERVISEUR'), wrap(async (req, res) 
   }
   const r = await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa-$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
     [uv, fcfa, req.params.id]);
-  const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-    [req.params.id, uv, fcfa, req.user.id, 'SUPERVISEUR']);
+  const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role, reseau_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+    [req.params.id, uv, fcfa, req.user.id, 'SUPERVISEUR', reseauId]);
   sendToUser(req.params.id, { type: 'fund_returned', fund: r.rows[0], uv, fcfa });
   res.json({ ok: true, fund: r.rows[0], ret: ret.rows[0] });
 }));
@@ -1170,6 +1171,20 @@ app.post('/users/:id/return', requireRole('SUPERVISEUR'), wrap(async (req, res) 
 // Le superviseur consulte l'historique des versements (crédits UV/FCFA) accordés à un Master donné
 app.get('/users/:id/credits', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const r = await pool.query('SELECT * FROM fund_credits WHERE master_id=$1 ORDER BY created_at DESC LIMIT 300', [req.params.id]);
+  res.json(r.rows);
+}));
+
+// Historique UNIFIÉ des mouvements de fonds d'un Master : crédits + retraits, avec réseau, sens, nature, date
+app.get('/masters/:id/mouvements', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(`
+    SELECT m.created_at, m.sens, m.uv, m.fcfa, m.reseau_id, m.par_role, rs.nom AS reseau_nom
+    FROM (
+      SELECT created_at, 'CREDIT'  AS sens, uv, fcfa, reseau_id, NULL::text AS par_role FROM fund_credits WHERE master_id=$1
+      UNION ALL
+      SELECT created_at, 'RETRAIT' AS sens, uv, fcfa, reseau_id, initie_par_role AS par_role FROM fund_returns WHERE master_id=$1
+    ) m
+    LEFT JOIN gam_reseaux rs ON rs.id = m.reseau_id
+    ORDER BY m.created_at DESC LIMIT 400`, [req.params.id]);
   res.json(r.rows);
 }));
 
