@@ -236,7 +236,8 @@ async function ensureReseaux() {
     "CREATE TABLE IF NOT EXISTS gam_solde_reseau (id SERIAL PRIMARY KEY, master_id INTEGER, reseau_id INTEGER, solde_uv NUMERIC NOT NULL DEFAULT 0)",
     "CREATE UNIQUE INDEX IF NOT EXISTS gam_solde_reseau_uniq ON gam_solde_reseau(master_id, reseau_id)",
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
-    "ALTER TABLE fund_credits ADD COLUMN IF NOT EXISTS reseau_id INTEGER"
+    "ALTER TABLE fund_credits ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
+    "CREATE TABLE IF NOT EXISTS gam_rachats_uv (id SERIAL PRIMARY KEY, master_id INTEGER, pdv_id INTEGER, reseau_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now())"
   ];
   for (const s of stmts) { try { await pool.query(s); } catch (e) { console.error('ensureReseaux:', e.message); } }
   // Seed des réseaux courants si la table est vide
@@ -609,14 +610,17 @@ app.post('/master/recharges/:id/pay', requireRole('MASTER'), wrap(async (req, re
   // 1 UV = 1 FCFA : montant_fcfa porte toujours le montant dû.
   const modePaiement = req.body.mode_paiement === 'UV' ? 'UV' : 'FCFA';
   const montant = Number(rc.rows[0].montant_fcfa);
+  // Pour un retour UV, le PDV peut rendre l'UV sur le réseau où il en a (par défaut celui de la recharge)
+  const retourReseau = modePaiement === 'UV' ? (Number(req.body.reseau_id) || rc.rows[0].reseau_id || null) : null;
+  if (modePaiement === 'UV' && !retourReseau) return res.status(400).json({ error: 'Choisis le réseau sur lequel le PDV rend l\'UV' });
   await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement=$1, regle_par=$2, regle_par_role='MASTER', paid_at=now() WHERE id=$3",
     [modePaiement, req.user.id, req.params.id]);
   const fund = modePaiement === 'UV'
     ? await pool.query('UPDATE users SET solde_uv=solde_uv+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id])
     : await pool.query('UPDATE users SET solde_fcfa=solde_fcfa+$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
-  // Retour d'UV : l'UV revient sur le réseau d'origine de la recharge
-  if (modePaiement === 'UV' && rc.rows[0].reseau_id) {
-    await pool.query('UPDATE gam_solde_reseau SET solde_uv=solde_uv+$1 WHERE master_id=$2 AND reseau_id=$3', [montant, req.user.id, rc.rows[0].reseau_id]);
+  // Retour d'UV : l'UV revient sur le réseau choisi par le Master
+  if (modePaiement === 'UV' && retourReseau) {
+    await pool.query('INSERT INTO gam_solde_reseau (master_id, reseau_id, solde_uv) VALUES ($1,$2,$3) ON CONFLICT (master_id, reseau_id) DO UPDATE SET solde_uv = gam_solde_reseau.solde_uv + $3', [req.user.id, retourReseau, montant]);
   }
   broadcastToSupervisors({ type: 'recharge_paid', masterId: req.user.id, id: Number(req.params.id), mode_paiement: modePaiement });
   res.json({ ok: true, fund: fund.rows[0] });
@@ -632,17 +636,56 @@ app.get('/master/returns', requireRole('MASTER'), wrap(async (req, res) => {
 app.post('/master/returns', requireRole('MASTER'), wrap(async (req, res) => {
   const uv = numOrNaN(req.body.uv) || 0;
   const fcfa = numOrNaN(req.body.fcfa) || 0;
+  const reseauId = uv > 0 ? (Number(req.body.reseau_id) || null) : null;
   if (!(uv > 0) && !(fcfa > 0)) return res.status(400).json({ error: 'Indique un montant en UV et/ou en FCFA à retourner' });
+  if (uv > 0 && !reseauId) return res.status(400).json({ error: 'Choisis le réseau de l\'UV à retourner' });
   const m = await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [req.user.id]);
   const solde = m.rows[0] || { solde_uv: 0, solde_fcfa: 0 };
   if (uv > Number(solde.solde_uv)) return res.status(400).json({ error: 'Tu ne peux pas retourner plus d\'UV que ton solde disponible (' + solde.solde_uv + ')' });
   if (fcfa > Number(solde.solde_fcfa)) return res.status(400).json({ error: 'Tu ne peux pas retourner plus de FCFA que ton solde encaissé (' + solde.solde_fcfa + ')' });
+  if (uv > 0 && reseauId) {
+    const b = await pool.query('SELECT solde_uv FROM gam_solde_reseau WHERE master_id=$1 AND reseau_id=$2', [req.user.id, reseauId]);
+    const bal = b.rows.length ? Number(b.rows[0].solde_uv) : 0;
+    if (uv > bal) {
+      const rn = await pool.query('SELECT nom FROM gam_reseaux WHERE id=$1', [reseauId]);
+      return res.status(400).json({ error: 'Tu n\'as que ' + bal + ' UV sur ' + (rn.rows[0] ? rn.rows[0].nom : 'ce réseau') });
+    }
+    await pool.query('UPDATE gam_solde_reseau SET solde_uv=solde_uv-$1 WHERE master_id=$2 AND reseau_id=$3', [uv, req.user.id, reseauId]);
+  }
   const fund = await pool.query('UPDATE users SET solde_uv=solde_uv-$1, solde_fcfa=solde_fcfa-$2 WHERE id=$3 RETURNING solde_uv, solde_fcfa',
     [uv, fcfa, req.user.id]);
   const ret = await pool.query('INSERT INTO fund_returns (master_id, uv, fcfa, initie_par, initie_par_role) VALUES ($1,$2,$3,$1,$4) RETURNING *',
     [req.user.id, uv, fcfa, 'MASTER']);
   broadcastToSupervisors({ type: 'fund_return_created', masterId: req.user.id, ret: ret.rows[0] });
   res.json({ ok: true, fund: fund.rows[0], ret: ret.rows[0] });
+}));
+
+// RACHAT LIBRE d'UV : le PDV rend de l'UV (sans dette) -> le Master le paie en FCFA.
+// Effet : solde UV du réseau +montant, fonds FCFA -montant. Bloqué si FCFA insuffisant.
+app.post('/master/rachat-uv', requireRole('MASTER'), wrap(async (req, res) => {
+  const montant = numOrNaN(req.body.montant) || 0;
+  const reseauId = Number(req.body.reseau_id) || null;
+  const pdvId = Number(req.body.pdv_id) || null;
+  if (!(montant > 0)) return res.status(400).json({ error: 'Indique un montant d\'UV à racheter' });
+  if (!reseauId) return res.status(400).json({ error: 'Choisis le réseau sur lequel le PDV rend l\'UV' });
+  const m = await pool.query('SELECT solde_fcfa FROM users WHERE id=$1', [req.user.id]);
+  const soldeFcfa = Number((m.rows[0] || {}).solde_fcfa || 0);
+  if (montant > soldeFcfa) return res.status(400).json({ error: 'Fonds FCFA insuffisant pour racheter cet UV (disponible : ' + soldeFcfa + ' FCFA)' });
+  await pool.query('INSERT INTO gam_solde_reseau (master_id, reseau_id, solde_uv) VALUES ($1,$2,$3) ON CONFLICT (master_id, reseau_id) DO UPDATE SET solde_uv = gam_solde_reseau.solde_uv + $3', [req.user.id, reseauId, montant]);
+  const fund = await pool.query('UPDATE users SET solde_uv=solde_uv+$1, solde_fcfa=solde_fcfa-$1 WHERE id=$2 RETURNING solde_uv, solde_fcfa', [montant, req.user.id]);
+  await pool.query('INSERT INTO gam_rachats_uv (master_id, pdv_id, reseau_id, montant) VALUES ($1,$2,$3,$4)', [req.user.id, pdvId, reseauId, montant]);
+  res.json({ ok: true, fund: fund.rows[0] });
+}));
+
+// Historique des rachats libres d'UV du Master
+app.get('/master/rachats', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT ra.id, ra.montant, ra.created_at, rs.nom AS reseau_nom, p.nom_commercial, p.username AS pdv_username
+     FROM gam_rachats_uv ra
+     LEFT JOIN gam_reseaux rs ON rs.id=ra.reseau_id
+     LEFT JOIN users p ON p.id=ra.pdv_id
+     WHERE ra.master_id=$1 ORDER BY ra.created_at DESC LIMIT 200`, [req.user.id]);
+  res.json(r.rows);
 }));
 
 /* =====================================================================
