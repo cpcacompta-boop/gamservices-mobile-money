@@ -521,7 +521,7 @@
           '<p class="dlg-msg">'+esc(message)+'</p>'+
           '<div class="dlg-actions" style="flex-direction:column;gap:10px">'+
             '<button class="dlg-ok info" data-mp="FCFA" type="button" style="width:100%">💵 En espèces (FCFA) — mon fonds FCFA augmente</button>'+
-            '<button class="dlg-ok warn" data-mp="UV" type="button" style="width:100%">🔁 En UV (retour) — mon fonds UV augmente</button>'+
+            '<button class="dlg-ok warn" data-mp="UV" type="button" style="width:100%">🔁 Retour (UV) — le PDV rend de l\'UV, mon fonds UV augmente</button>'+
             '<button class="dlg-cancel" data-mp-cancel type="button" style="width:100%">Annuler</button>'+
           '</div>'+
         '</div>';
@@ -643,14 +643,15 @@
     fonds:'<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/><circle cx="16" cy="14.5" r="1.6"/>',
     recouvrement:'<path d="M21 12V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9"/><path d="M3 10h18"/><path d="M16.5 17.5l2 2 3.5-3.5"/>',
     caisse:'<path d="M4 9h16l-1 10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/><circle cx="12" cy="14" r="1.6"/>',
-    rapports:'<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6M9 9h2"/>'
+    rapports:'<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6M9 9h2"/>',
+    reseaux:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
     {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Recharges UV'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'}]},
-    {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'fonds',label:'Fonds Masters'}]}
+    {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'reseaux',label:'Réseaux'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','fonds'], MASTER:['dashboard','recharges','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -662,7 +663,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Recharges UV', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -699,8 +700,17 @@
       const d=S.rapportsDate?('?date='+encodeURIComponent(S.rapportsDate)):'';
       try{ S.rapports=await api('/master/reports'+d); }catch(e){ S.rapports={_error:e.message||'Erreur serveur'}; }
     }
+    if((v==='reseaux' || v==='fonds') && S.auth.user.role==='SUPERVISEUR'){
+      try{ S.reseaux=await api('/reseaux'); }catch(e){ S.reseaux=S.reseaux||[]; }
+    }
+    if(v==='recharges' && S.auth.user.role==='MASTER'){
+      try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){ S.masterReseaux=S.masterReseaux||{reseaux:[],total:0}; }
+    }
+    if(v==='dashboard' && S.auth.user.role==='MASTER'){
+      try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){ S.masterReseaux=S.masterReseaux||{reseaux:[],total:0}; }
+    }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -733,6 +743,7 @@
         <div class="stat${enRetard?' red':''}"><div class="lbl">Recharges en attente</div><div class="num">${enAttente}${enRetard?' <span style="font-size:11px;color:var(--red)">('+enRetard+' en retard)</span>':''}</div></div>
       </div>
       ${renderFundStatus(fund)}
+      ${renderReseauxSolde()}
       <div class="panel">
         <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
         <div style="padding:14px 20px;font-size:12px;line-height:2.1;color:var(--ink)">
@@ -812,6 +823,7 @@
           <div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:6px">+ Créditer le fonds</div>
           <form data-form-credit-inline data-master="${m.id}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
             <div class="field" style="flex:1;min-width:100px"><label>+ UV</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>
+            <div class="field" style="flex:1;min-width:130px"><label>Réseau (UV)</label><select name="reseau_id">${reseauOptions()}</select></div>
             <div class="field" style="flex:1;min-width:100px"><label>+ FCFA</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
             <button class="btn small" type="submit">Créditer</button>
           </form>
@@ -819,6 +831,7 @@
           <div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin:14px 0 6px;padding-top:12px;border-top:1px dashed var(--line)">− Retirer du fonds (retour)</div>
           <form data-form-return-inline data-master="${m.id}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
             <div class="field" style="flex:1;min-width:100px"><label>− UV</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>
+            <div class="field" style="flex:1;min-width:130px"><label>Réseau (UV)</label><select name="reseau_id">${reseauOptions()}</select></div>
             <div class="field" style="flex:1;min-width:100px"><label>− FCFA</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
             <button class="btn small" type="submit" style="background:var(--red)">Retirer</button>
           </form>
@@ -926,6 +939,60 @@
     body+=nonPointesReportHtml(report);
     body+=signatureBlock('Le Master','Le Superviseur');
     printReport(reportShell('Fiche de point — Master & Superviseur', body));
+  }
+
+  /* ---------- RÉSEAUX (superviseur) : gérer Wave, Orange Money, Moov Money, Djamo… ---------- */
+  function dlgPrompt(opts){
+    opts=opts||{};
+    return new Promise(resolve=>{
+      const ov=$('dlg-overlay');
+      ov.innerHTML='<div class="dlg-box dlg-type-info" role="alertdialog" aria-modal="true">'+
+        '<button class="dlg-x" data-dp-close type="button" aria-label="Fermer">&#10005;</button>'+
+        '<div class="dlg-icon info">'+DLG_ICONS.info+'</div>'+
+        '<h3 class="dlg-title">'+esc(opts.title||'Saisir')+'</h3>'+
+        (opts.message?'<p class="dlg-msg">'+esc(opts.message)+'</p>':'')+
+        '<input data-dp-input style="width:100%;margin:8px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:13px" value="'+esc(opts.value||'')+'" placeholder="'+esc(opts.placeholder||'')+'">'+
+        '<div class="dlg-actions"><button class="dlg-cancel" data-dp-cancel type="button">Annuler</button><button class="dlg-ok info" data-dp-ok type="button">'+esc(opts.okText||'Valider')+'</button></div>'+
+      '</div>';
+      ov.classList.add('open'); document.body.classList.add('dlg-lock');
+      const inp=ov.querySelector('[data-dp-input]'); if(inp){ setTimeout(function(){ inp.focus(); try{inp.select();}catch(e){} }, 40); }
+      let closed=false;
+      const close=(val)=>{ if(closed)return; closed=true; ov.classList.remove('open'); ov.innerHTML=''; document.body.classList.remove('dlg-lock'); resolve(val); };
+      ov.querySelector('[data-dp-ok]').addEventListener('click',()=>close(inp?inp.value.trim():''));
+      ov.querySelector('[data-dp-cancel]').addEventListener('click',()=>close(null));
+      const xc=ov.querySelector('[data-dp-close]'); if(xc) xc.addEventListener('click',()=>close(null));
+      if(inp) inp.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); close(inp.value.trim()); } });
+    });
+  }
+  function reseauOptions(selected){
+    const list=(S.reseaux||[]).filter(function(r){return r.actif;});
+    return '<option value="">— choisir le réseau —</option>'+list.map(function(r){return '<option value="'+r.id+'"'+(String(selected)===String(r.id)?' selected':'')+'>'+esc(r.nom)+'</option>';}).join('');
+  }
+  function masterReseauOptions(selected){
+    const list=((S.masterReseaux&&S.masterReseaux.reseaux)||[]).filter(function(r){return r.actif || r.solde_uv>0;});
+    return '<option value="">— choisir le réseau —</option>'+list.map(function(r){return '<option value="'+r.id+'"'+(String(selected)===String(r.id)?' selected':'')+'>'+esc(r.nom)+' (dispo : '+fmtFcfa(r.solde_uv)+' UV)</option>';}).join('');
+  }
+  function renderReseaux(){
+    const list=S.reseaux||[];
+    const header=`<div class="welcome"><h2>Réseaux 🔌</h2><p>Gère les réseaux d'UV (Wave, Orange Money, Moov Money, Djamo…). Le Master choisit le réseau à chaque recharge UV, et son solde est suivi par réseau.</p></div>`;
+    const addForm='<div class="panel"><div class="panel-head"><h3>Ajouter un réseau</h3></div>'+
+      '<form data-form-reseau style="padding:16px 20px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">'+
+        '<div class="field" style="flex:1;min-width:180px"><label>Nom du réseau</label><input name="nom" required placeholder="ex : Wave, Orange Money…"></div>'+
+        '<button class="btn" type="submit">Ajouter</button>'+
+      '</form><div class="msg" data-reseau-msg style="padding:0 20px 10px"></div></div>';
+    const rows=list.length?list.map(function(r){
+      return '<tr><td><b>'+esc(r.nom)+'</b></td>'+
+        '<td>'+(r.actif?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Actif</span>':'<span class="pill" style="background:var(--red-soft);color:var(--red)">Désactivé</span>')+'</td>'+
+        '<td style="white-space:nowrap">'+
+          '<button class="btn small" data-reseau-rename="'+r.id+'" data-nom="'+esc(r.nom)+'" type="button">Renommer</button> '+
+          (r.actif
+            ? '<button class="btn small" style="background:var(--red-soft);color:var(--red)" data-reseau-toggle="'+r.id+'" data-actif="0" type="button">Désactiver</button>'
+            : '<button class="btn small" data-reseau-toggle="'+r.id+'" data-actif="1" type="button">Réactiver</button>')+
+        '</td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="3">Aucun réseau — ajoute-en un ci-dessus</td></tr>';
+    const table='<div class="panel"><div class="panel-head"><h3>Réseaux existants</h3><span class="hint">Un réseau désactivé n\'est plus proposé, mais les soldes existants restent intacts</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Réseau</th><th>Statut</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    return header+addForm+table;
   }
 
   /* ---------- POINTS & RAPPORTS (Master) : 3 niveaux + clôture figée + archives ---------- */
@@ -1212,6 +1279,7 @@
         <div class="stat"><div class="lbl">Total crédité depuis le début</div><div class="num">${fmtFcfa(fund.total_credite)}</div></div>
       </div>
       ${renderFundStatus(fund)}
+      ${renderReseauxSolde()}
       <div class="panel">
         <div class="panel-head"><h3>Vérification du fonds</h3><span class="hint">Pour t'assurer qu'il ne manque rien</span></div>
         <div style="padding:14px 20px;font-size:12px;line-height:2.1;color:var(--ink)">
@@ -1238,6 +1306,10 @@
                 <option value="FCFA">FCFA — avance de cash directe (le PDV doit rembourser)</option>
               </select>
             </div>
+            <div class="field span2" data-rc-reseau-wrap>
+              <label>Réseau de l'UV</label>
+              <select name="reseau_id" data-rc-reseau>${masterReseauOptions()}</select>
+            </div>
             <div class="field"><label data-rc-label>Montant en UV</label><input name="montant_uv" data-rc-uv type="number" min="0.01" step="any" required placeholder="ex : 50000"></div>
             <div class="field"><label data-rc-eq-label>Équivalent en FCFA (1 UV = 1 FCFA)</label><input data-rc-fcfa type="number" readonly tabindex="-1" style="background:var(--surface-2);color:var(--ink-soft)" placeholder="calculé automatiquement"></div>
             <div class="field span2" style="flex-direction:row;align-items:center;gap:8px;display:flex">
@@ -1248,7 +1320,7 @@
               <label>Le PDV règle en…</label>
               <select name="mode_paiement" data-rc-mode>
                 <option value="FCFA">💵 Espèces (FCFA) — mon fonds FCFA augmente</option>
-                <option value="UV">🔁 UV (retour) — mon fonds UV augmente</option>
+                <option value="UV">🔁 Retour (UV) — le PDV rend de l'UV, mon fonds UV augmente</option>
               </select>
             </div>
           </div>
@@ -1266,7 +1338,8 @@
         <form data-form-return style="padding:0">
           <div class="form-grid">
             <div class="field"><label>UV à retourner</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>
-            <div class="field"><label>FCFA à retourner</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
+            <div class="field"><label>Réseau (pour l'UV)</label><select name="reseau_id">${masterReseauOptions()}</select></div>
+            <div class="field span2"><label>FCFA à retourner</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>
           </div>
           <div style="padding:0 20px 6px;color:var(--ink-soft);font-size:11px">Le montant retourné est retiré immédiatement de ton fonds. Ce n'est pas une recharge — c'est une restitution vers le superviseur.</div>
           <div class="msg" data-msg></div>
@@ -1572,6 +1645,16 @@
   // Bandeau de statut du fonds : rouge si (Fonds UV + Fonds FCFA) ≠ (Total crédité − Total retourné
   // − ce qui est encore chez les PDV), vert sinon. On compare UNIQUEMENT la somme globale : l'UV
   // se transforme en FCFA dès qu'un PDV paie, donc un découpage par fonds donnerait un faux manquant.
+  function renderReseauxSolde(){
+    const data=S.masterReseaux||{reseaux:[],total:0};
+    const list=(data.reseaux||[]).filter(function(r){return r.actif || r.solde_uv>0;});
+    if(!list.length) return '';
+    const rows=list.map(function(r){
+      return '<div class="stat'+(r.solde_uv>0?' gold':'')+'"><div class="lbl">'+esc(r.nom)+(r.actif?'':' (désactivé)')+'</div><div class="num">'+fmtUv(r.solde_uv)+'</div></div>';
+    }).join('');
+    return '<div class="panel"><div class="panel-head"><h3>Solde UV par réseau</h3><span class="hint">Total (somme des réseaux) : '+fmtUv(data.total)+' UV</span></div>'+
+      '<div class="stat-row" style="padding:14px 16px">'+rows+'</div></div>';
+  }
   function renderFundStatus(fund){
     const m=Number(fund.manquant||0);
     const enCirc=Number(fund.en_circulation||0);
@@ -1613,12 +1696,15 @@
   }
 
   /* ---------- SUPERVISEUR : créditer le fonds d'un Master ---------- */
-  function openCreditMaster(id, dispName){
+  async function openCreditMaster(id, dispName){
+    let reseaux=[]; try{ reseaux=await api('/reseaux'); }catch(e){}
+    const opts='<option value="">— choisir le réseau —</option>'+reseaux.filter(function(r){return r.actif;}).map(function(r){return '<option value="'+r.id+'">'+esc(r.nom)+'</option>';}).join('');
     $('modal').innerHTML='<div class="modal-head"><h3>Créditer — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
       '<div class="modal-body" style="text-align:left"><form data-form-credit>'+
         '<div class="form-grid">'+
           '<div class="field"><label>Montant en UV à ajouter</label><input name="uv" type="number" min="0" step="any" placeholder="0"></div>'+
-          '<div class="field"><label>Montant en FCFA à ajouter</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>'+
+          '<div class="field"><label>Réseau (pour l\'UV)</label><select name="reseau_id">'+opts+'</select></div>'+
+          '<div class="field span2"><label>Montant en FCFA à ajouter</label><input name="fcfa" type="number" min="0" step="any" placeholder="0"></div>'+
         '</div>'+
         '<div class="msg" data-msg></div>'+
         '<div class="form-actions"><button class="btn" type="submit">Créditer le fonds</button></div>'+
@@ -1817,15 +1903,19 @@
       const typeIn=rf.querySelector('[data-rc-type]'), uvIn=rf.querySelector('[data-rc-uv]'), fcfaIn=rf.querySelector('[data-rc-fcfa]');
       const label=rf.querySelector('[data-rc-label]'), eqLabel=rf.querySelector('[data-rc-eq-label]'), paidLabel=rf.querySelector('[data-rc-paid-label]'), hint=rf.querySelector('[data-rc-hint]');
       if(uvIn && fcfaIn){ uvIn.addEventListener('input', ()=>{ fcfaIn.value=uvIn.value; }); }
+      const reseauWrap=rf.querySelector('[data-rc-reseau-wrap]'), reseauSel=rf.querySelector('[data-rc-reseau]');
       function applyType(){
         const isFcfa=typeIn && typeIn.value==='FCFA';
         if(label) label.textContent=isFcfa?'Montant en FCFA':'Montant en UV';
         if(eqLabel) eqLabel.textContent=isFcfa?'Équivalent en UV (1 UV = 1 FCFA)':'Équivalent en FCFA (1 UV = 1 FCFA)';
         if(uvIn) uvIn.placeholder=isFcfa?'ex : 25000':'ex : 50000';
         if(paidLabel) paidLabel.textContent=isFcfa?'Le PDV a déjà remboursé (immédiat)':'Le PDV a déjà payé (encaissement immédiat)';
+        // Le réseau ne concerne que l'UV
+        if(reseauWrap) reseauWrap.style.display=isFcfa?'none':'';
+        if(reseauSel) reseauSel.required=!isFcfa;
         if(hint) hint.textContent=isFcfa
           ? "Cette avance débite ton fonds FCFA. Si le PDV n'a pas encore remboursé, elle reste « en attente » jusqu'au remboursement — même jour ou plus tard."
-          : "Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée — même jour ou plus tard.";
+          : "Choisis le réseau (Wave, Orange…) d'où sort l'UV. Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée.";
       }
       if(typeIn){ typeIn.addEventListener('change', applyType); applyType(); }
       // Le sélecteur de mode (espèces / UV) n'apparaît que si le PDV a déjà payé
@@ -1911,6 +2001,26 @@
         S.masterCaisse=await api('/master/caisse'+(S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'')); renderView();
         dlgSuccess('Versement rejeté','Le commercial a été notifié, l\'argent est de nouveau en main.');
       }catch(err){ b.disabled=false; b.textContent='Rejeter'; dlgError('Erreur',err.message); }
+    }));
+    // ---- Réseaux (Superviseur) ----
+    const rzForm=document.querySelector('form[data-form-reseau]');
+    if(rzForm) rzForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const nom=(new FormData(rzForm).get('nom')||'').toString().trim();
+      const msg=document.querySelector('[data-reseau-msg]'); if(msg){ msg.textContent=''; }
+      if(!nom) return;
+      try{ await api('/reseaux',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nom})}); S.reseaux=await api('/reseaux'); renderView(); }
+      catch(err){ if(msg){ msg.textContent=err.message; msg.style.color='var(--red)'; } }
+    });
+    document.querySelectorAll('[data-reseau-toggle]').forEach(b=>b.addEventListener('click', async ()=>{
+      try{ await api('/reseaux/'+b.dataset.reseauToggle,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({actif:b.dataset.actif==='1'})}); S.reseaux=await api('/reseaux'); renderView(); }
+      catch(err){ dlgError('Erreur', err.message); }
+    }));
+    document.querySelectorAll('[data-reseau-rename]').forEach(b=>b.addEventListener('click', async ()=>{
+      const nv=await dlgPrompt({title:'Renommer le réseau', value:b.dataset.nom||'', okText:'Renommer'});
+      if(nv===null || !nv.trim()) return;
+      try{ await api('/reseaux/'+b.dataset.reseauRename,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({nom:nv.trim()})}); S.reseaux=await api('/reseaux'); renderView(); }
+      catch(err){ dlgError('Erreur', err.message); }
     }));
     // ---- Points & Rapports (Master) ----
     const rapDate=document.querySelector('[data-rap-date]');
