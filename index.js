@@ -1218,6 +1218,21 @@ app.get('/masters/stats', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
 }));
 
 // Historique global de tous les versements (crédits) faits par le superviseur, tous Masters confondus
+app.get('/masters/mouvements', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
+  const r = await pool.query(`
+    SELECT m.master_id, m.created_at, m.sens, m.uv, m.fcfa, m.reseau_id, m.par_role,
+           rs.nom AS reseau_nom, u.username, u.nom, u.prenoms
+    FROM (
+      SELECT master_id, created_at, 'CREDIT'  AS sens, uv, fcfa, reseau_id, NULL::text AS par_role FROM fund_credits
+      UNION ALL
+      SELECT master_id, created_at, 'RETRAIT' AS sens, uv, fcfa, reseau_id, initie_par_role AS par_role FROM fund_returns
+    ) m
+    JOIN users u ON u.id = m.master_id
+    LEFT JOIN gam_reseaux rs ON rs.id = m.reseau_id
+    ORDER BY m.created_at DESC LIMIT 300`);
+  res.json(r.rows);
+}));
+
 app.get('/masters/credits', requireRole('SUPERVISEUR'), wrap(async (req, res) => {
   const r = await pool.query(
     `SELECT fc.*, u.username, u.nom, u.prenoms
