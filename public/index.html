@@ -1432,9 +1432,16 @@
     const rows=list.length?list.map(function(d){
       const pdv=d.nom_commercial||d.pdv_username||'—';
       const pris=[d.pris_nom,d.pris_prenoms].filter(Boolean).join(' ')||d.pris_username||'';
-      const action=d.statut==='EN_ATTENTE'
-        ? '<button class="btn small" data-dem-take="'+d.id+'" type="button">Je m\'en occupe</button>'
-        : '<button class="btn small" data-dem-serve="'+d.id+'" type="button">Marquer servi</button>';
+      // Le commercial ne PEUT PAS servir de l'UV : sur une demande de RECHARGEMENT, il voit seulement (pas de bouton).
+      const peutAgir = (S.auth.user.role==='MASTER') || (d.type==='RETOUR');
+      let action;
+      if(!peutAgir){
+        action='<span style="font-size:11px;color:var(--ink-soft)">À servir par le Master</span>';
+      } else {
+        action=d.statut==='EN_ATTENTE'
+          ? '<button class="btn small" data-dem-take="'+d.id+'" type="button">Je m\'en occupe</button>'
+          : '<button class="btn small" data-dem-serve="'+d.id+'" type="button">Marquer servi</button>';
+      }
       return '<tr><td><b>'+esc(pdv)+'</b></td><td>'+demTypePill(d.type)+'</td><td>'+esc(d.reseau_nom||'—')+'</td><td>'+(Number(d.montant)>0?fmtUv(d.montant)+' UV':'—')+'</td><td>'+demStatutPill(d)+(pris?' <span style="font-size:11px;color:var(--ink-soft)">'+esc(pris)+'</span>':'')+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(d.created_at)+'</td><td style="white-space:nowrap">'+action+'</td></tr>';
     }).join(''):'<tr class="empty-row"><td colspan="7">Aucune demande active ✔</td></tr>';
     return header+'<div class="panel"><div class="panel-head"><h3>Demandes actives</h3></div><div class="table-wrap"><table><thead><tr><th>PDV</th><th>Type</th><th>Réseau</th><th>Montant</th><th>Statut</th><th>Depuis</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
