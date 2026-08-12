@@ -813,6 +813,13 @@ app.get('/commercial/demandes', requireRole('COMMERCIAL'), wrap(async (req, res)
 // Master ou Commercial : « Je m'en occupe » (anti-doublon garanti par le WHERE statut='EN_ATTENTE')
 app.post('/demandes/:id/take', requireRole('MASTER', 'COMMERCIAL'), wrap(async (req, res) => {
   const nom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
+  // Sécurité argent : le commercial ne peut pas servir de l'UV -> interdit sur les demandes de RECHARGEMENT
+  if (req.user.role === 'COMMERCIAL') {
+    const chk = await pool.query('SELECT type FROM gam_demandes WHERE id=$1', [req.params.id]);
+    if (chk.rows.length && chk.rows[0].type === 'RECHARGEMENT') {
+      return res.status(403).json({ error: "Une demande de rechargement (UV) est servie par le Master. Tu passeras encaisser le cash." });
+    }
+  }
   const upd = await pool.query(
     "UPDATE gam_demandes SET statut='PRIS', pris_par=$1, pris_par_role=$2, updated_at=now() WHERE id=$3 AND statut='EN_ATTENTE' RETURNING *",
     [req.user.id, req.user.role, req.params.id]);
@@ -829,6 +836,12 @@ app.post('/demandes/:id/take', requireRole('MASTER', 'COMMERCIAL'), wrap(async (
 
 // Master ou Commercial : « Servi » (clôture la demande)
 app.post('/demandes/:id/serve', requireRole('MASTER', 'COMMERCIAL'), wrap(async (req, res) => {
+  if (req.user.role === 'COMMERCIAL') {
+    const chk = await pool.query('SELECT type FROM gam_demandes WHERE id=$1', [req.params.id]);
+    if (chk.rows.length && chk.rows[0].type === 'RECHARGEMENT') {
+      return res.status(403).json({ error: "Une demande de rechargement (UV) est servie par le Master." });
+    }
+  }
   const upd = await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1 AND statut IN ('EN_ATTENTE','PRIS') RETURNING *", [req.params.id]);
   if (!upd.rows.length) return res.status(409).json({ error: 'Demande déjà traitée.' });
   sendToUser(upd.rows[0].pdv_id, { type: 'demande_update', statut: 'SERVI' });
