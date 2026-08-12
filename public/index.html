@@ -645,14 +645,15 @@
     caisse:'<path d="M4 9h16l-1 10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/><circle cx="12" cy="14" r="1.6"/>',
     rapports:'<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6M9 9h2"/>',
     reseaux:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-    retours:'<path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/>'
+    retours:'<path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/>',
+    releve:'<path d="M6 2h9l4 4v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v5h5"/><path d="M9 12h6M9 16h6M9 8h3"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Rechargement'},{id:'retours',label:'Retours'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Rechargement'},{id:'retours',label:'Retours'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'},{id:'releve',label:'Mon relevé'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'reseaux',label:'Réseaux'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','retours','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','retours','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard','releve'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -664,7 +665,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Rechargement', retours:'Retours', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Rechargement', retours:'Retours', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports', releve:'Mon relevé' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -710,6 +711,10 @@
     if(v==='dashboard' && S.auth.user.role==='MASTER'){
       try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){ S.masterReseaux=S.masterReseaux||{reseaux:[],total:0}; }
     }
+    if(v==='releve' && S.auth.user.role==='PDV'){
+      const d=S.releveDate?('?date='+encodeURIComponent(S.releveDate)):'';
+      try{ S.releve=await api('/me/releve'+d); }catch(e){ S.releve={_error:e.message||'Erreur serveur'}; }
+    }
     if(v==='retours' && S.auth.user.role==='MASTER'){
       await loadMasterData();
       try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){ S.masterReseaux=S.masterReseaux||{reseaux:[],total:0}; }
@@ -717,7 +722,7 @@
       try{ S.rachats=await api('/master/rachats'); }catch(e){ S.rachats=S.rachats||[]; }
     }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,retours:renderRetours,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,retours:renderRetours,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports,releve:renderReleve}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -1296,6 +1301,84 @@
     });
   }
 
+  /* ---------- RELEVÉ PARTAGÉ PDV <-> MASTER ---------- */
+  function releveBodyHtml(data){
+    const sum=data.summary||{recu:0,regle:0,reste:0};
+    const stats='<div class="stat-row">'+
+      '<div class="stat"><div class="lbl">Total reçu (UV)</div><div class="num">'+fmtUv(sum.recu)+'</div></div>'+
+      '<div class="stat"><div class="lbl">Total réglé</div><div class="num">'+fmtUv(sum.regle)+'</div></div>'+
+      '<div class="stat'+(sum.reste>0?' red':' gold')+'"><div class="lbl">Reste à payer</div><div class="num">'+fmtUv(sum.reste)+'</div></div>'+
+    '</div>';
+    const items=data.items||[];
+    const rows=items.length?items.map(function(it){
+      const regle=it.statut==='PAYE';
+      const modeTxt=regle?(it.mode_paiement==='UV'?'Retour (UV)':'Espèces (FCFA)'):'—';
+      const who=regle
+        ? (it.regle_par_role==='COMMERCIAL'
+            ? '<span class="pill" style="background:#E4ECFB;color:var(--brand)">Commercial</span> '+esc([it.regle_nom,it.regle_prenoms].filter(Boolean).join(' ')||it.regle_username||'')
+            : (it.regle_par_role==='MASTER' ? '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Master</span>' : '—'))
+        : '—';
+      const statut=regle
+        ? '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Réglé ✔</span>'
+        : '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">En attente ⏳</span>';
+      return '<tr>'+
+        '<td style="font-size:11px;color:var(--ink-soft);white-space:nowrap">'+fmtDateTime(it.created_at)+'</td>'+
+        '<td><span class="pill" style="background:rgba(200,155,60,.16);color:var(--gold)">Rechargement</span></td>'+
+        '<td>'+esc(it.reseau_nom||'—')+'</td>'+
+        '<td style="text-align:right"><b>'+fmtUv(it.montant_fcfa)+'</b> UV</td>'+
+        '<td>'+modeTxt+'</td>'+
+        '<td>'+who+'</td>'+
+        '<td>'+statut+'</td>'+
+      '</tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="7">Aucun mouvement</td></tr>';
+    const table='<div class="panel"><div class="panel-head"><h3>Détail des opérations</h3><span class="hint">Rechargements reçus et comment ils ont été réglés — qui est passé encaisser</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Réseau</th><th style="text-align:right">Montant</th><th>Réglé en</th><th>Encaissé par</th><th>Statut</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    return stats+table;
+  }
+
+  function renderReleve(){
+    const data=S.releve;
+    if(data && data._error){ return caisseErrorPanel(data._error); }
+    if(!data){ return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;text-align:center">Chargement…</div></div>'; }
+    const header=`<div class="welcome"><h2>Mon relevé 📄</h2><p>Tout ce que tu as reçu, réglé, et ce qu'il te reste à payer. Ton Master voit exactement le même relevé.</p></div>`;
+    const filtre='<div class="panel"><div style="padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+      '<label style="font-size:11px;color:var(--ink-soft);font-weight:700">Filtrer par jour :</label>'+
+      '<input type="date" data-releve-date value="'+esc(S.releveDate||'')+'" style="max-width:170px">'+
+      '<button class="btn small" data-releve-all type="button">Tout l\'historique</button>'+
+      '<button class="btn small" data-releve-print type="button">🖨️ Imprimer</button>'+
+    '</div></div>';
+    return header+filtre+releveBodyHtml(data);
+  }
+
+  async function openPdvReleve(id, dispName){
+    $('modal').innerHTML='<div class="modal-head"><h3>Relevé — '+esc(dispName)+'</h3><button class="x" data-close>✕</button></div>'+
+      '<div class="modal-body"><div style="padding:10px 0;color:var(--ink-soft);font-size:11px">Chargement…</div></div>';
+    $('modal').querySelector('[data-close]').addEventListener('click',closeModal);
+    $('overlay').classList.add('open');
+    try{
+      const data=await api('/pdv/'+id+'/releve');
+      S.pdvReleveCache=data;
+      $('modal').querySelector('.modal-body').innerHTML='<div style="margin-bottom:10px"><button class="btn small" data-releve-print-modal type="button">🖨️ Imprimer le relevé</button></div>'+releveBodyHtml(data);
+      const pb=$('modal').querySelector('[data-releve-print-modal]'); if(pb) pb.addEventListener('click',()=>printReleve(data));
+    }catch(err){ $('modal').querySelector('.modal-body').innerHTML='<div class="msg err" style="padding:10px 0">'+esc(err.message)+'</div>'; }
+  }
+
+  function printReleve(data){
+    const sum=data.summary||{recu:0,regle:0,reste:0};
+    let body='<div style="font-size:12px;margin-bottom:8px"><b>Point de vente :</b> '+esc((data.pdv&&data.pdv.nom)||'—')+(data.master?' &nbsp;&nbsp; <b>Master :</b> '+esc(data.master.nom):'')+(data.date?' &nbsp;&nbsp; <b>Jour :</b> '+esc(data.date):' &nbsp;&nbsp; <b>Période :</b> tout l\'historique')+'</div>';
+    body+=reportTable(['Total reçu','Total réglé','Reste à payer'],[[fmtUv(sum.recu)+' UV', fmtUv(sum.regle)+' UV', '<b>'+fmtUv(sum.reste)+' UV</b>']]);
+    const items=data.items||[];
+    const rows=items.map(function(it){
+      const regle=it.statut==='PAYE';
+      const modeTxt=regle?(it.mode_paiement==='UV'?'Retour (UV)':'Espèces'):'—';
+      const who=regle?(it.regle_par_role==='COMMERCIAL'?('Commercial '+([it.regle_nom,it.regle_prenoms].filter(Boolean).join(' ')||it.regle_username||'')):(it.regle_par_role==='MASTER'?'Master':'—')):'—';
+      return [fmtDateTime(it.created_at), esc(it.reseau_nom||'—'), fmtUv(it.montant_fcfa)+' UV', modeTxt, esc(who), regle?'Réglé':'En attente'];
+    });
+    body+='<div style="margin-top:12px"></div>'+reportTable(['Date','Réseau','Montant','Réglé en','Encaissé par','Statut'], rows.length?rows:[['—','—','0','—','—','—']]);
+    body+=signatureBlock('Le Point de vente','Le Master');
+    printReport(reportShell('Relevé de compte — Point de vente', body));
+  }
+
   function renderRetours(){
     const fund=S.masterFund||{solde_uv:0,solde_fcfa:0};
     const pending=(S.recharges||[]).filter(function(rc){return rc.statut==='EN_ATTENTE';});
@@ -1387,6 +1470,13 @@
           <div class="msg" data-msg></div>
           <div class="form-actions"><button class="btn" type="submit">Enregistrer la recharge</button></div>
         </form>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Relevé d'un point de vente</h3><span class="hint">Consulte/imprime le relevé partagé avec un PDV</span></div>
+        <div style="padding:14px 20px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div class="field" style="flex:1;min-width:200px"><label>Point de vente</label><select data-releve-pdv>${pdvOpts}</select></div>
+          <button class="btn small" data-open-releve type="button">Voir le relevé</button>
+        </div>
       </div>
       <div class="panel">
         <div class="panel-head"><h3>Historique des recharges</h3><span class="hint">${list.length} recharge(s)</span></div>
@@ -2018,6 +2108,19 @@
       }
       catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
     }));
+    // ---- Relevé partagé ----
+    const relDate=document.querySelector('[data-releve-date]');
+    if(relDate) relDate.addEventListener('change', ()=>{ S.releveDate=relDate.value||null; loadView('releve').then(renderView); });
+    const relAll=document.querySelector('[data-releve-all]');
+    if(relAll) relAll.addEventListener('click', ()=>{ S.releveDate=null; loadView('releve').then(renderView); });
+    const relPrint=document.querySelector('[data-releve-print]');
+    if(relPrint) relPrint.addEventListener('click', ()=>{ if(S.releve && !S.releve._error) printReleve(S.releve); });
+    const relOpen=document.querySelector('[data-open-releve]');
+    if(relOpen) relOpen.addEventListener('click', ()=>{
+      const sel=document.querySelector('[data-releve-pdv]'); if(!sel||!sel.value) return;
+      const nm=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].text:'PDV';
+      openPdvReleve(sel.value, nm);
+    });
     // ---- Retours (Master) : Cas 1 solder une recharge en UV ----
     document.querySelectorAll('[data-retour-solder]').forEach(b=>b.addEventListener('click', async ()=>{
       const rid=await askReseau({title:'Retour d\'UV',message:'Sur quel réseau le PDV rend-il les '+b.dataset.amount+' UV (pour '+b.dataset.pdv+') ?'});
