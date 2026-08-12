@@ -34,6 +34,7 @@ const wsClients = new Set(); // chaque ws porte .userId et .role
 function wsSend(ws, obj){ try{ if(ws.readyState === 1) ws.send(JSON.stringify(obj)); }catch(e){} }
 function sendToUser(userId, obj){ wsClients.forEach(ws=>{ if(ws.userId === Number(userId)) wsSend(ws, obj); }); }
 function broadcastToSupervisors(obj){ wsClients.forEach(ws=>{ if(ws.role === 'SUPERVISEUR') wsSend(ws, obj); }); }
+function broadcastToMasters(obj){ wsClients.forEach(ws=>{ if(ws.role === 'MASTER') wsSend(ws, obj); }); }
 function kickUser(userId){ wsClients.forEach(ws=>{ if(ws.userId === Number(userId)){ wsSend(ws, { type:'blocked' }); try{ ws.close(); }catch(e){} } }); }
 
 // Vérifie les recharges UV encaissées en attente depuis un jour précédent (paiement "oublié")
@@ -238,7 +239,9 @@ async function ensureReseaux() {
     "ALTER TABLE uv_recharges ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
     "ALTER TABLE fund_credits ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
     "ALTER TABLE fund_returns ADD COLUMN IF NOT EXISTS reseau_id INTEGER",
-    "CREATE TABLE IF NOT EXISTS gam_rachats_uv (id SERIAL PRIMARY KEY, master_id INTEGER, pdv_id INTEGER, reseau_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now())"
+    "CREATE TABLE IF NOT EXISTS gam_rachats_uv (id SERIAL PRIMARY KEY, master_id INTEGER, pdv_id INTEGER, reseau_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now())",
+    "CREATE TABLE IF NOT EXISTS gam_demandes (id SERIAL PRIMARY KEY, pdv_id INTEGER, master_id INTEGER, zone_id INTEGER, type TEXT NOT NULL, reseau_id INTEGER, montant NUMERIC DEFAULT 0, statut TEXT NOT NULL DEFAULT 'EN_ATTENTE', pris_par INTEGER, pris_par_role TEXT, note TEXT, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now())",
+    "CREATE INDEX IF NOT EXISTS gam_demandes_statut ON gam_demandes(statut, created_at DESC)"
   ];
   for (const s of stmts) { try { await pool.query(s); } catch (e) { console.error('ensureReseaux:', e.message); } }
   // Seed des réseaux courants si la table est vide
@@ -734,6 +737,104 @@ app.get('/pdv/:id/releve', requireRole('MASTER'), wrap(async (req, res) => {
   res.json(Object.assign({ pdv: { nom: u.nom_commercial || u.username }, master: { nom: [me.nom, me.prenoms].filter(Boolean).join(' ') || me.username }, date: dateStr }, r));
 }));
 
+/* ---- DEMANDES DU PDV : rechargement ou retour, notifiées en temps réel (Master + Commercial) ---- */
+
+// Le PDV crée une demande
+app.post('/pdv/demandes', requireRole('PDV'), wrap(async (req, res) => {
+  const type = req.body.type === 'RETOUR' ? 'RETOUR' : 'RECHARGEMENT';
+  const montant = numOrNaN(req.body.montant) || 0;
+  const reseauId = Number(req.body.reseau_id) || null;
+  const note = (req.body.note || '').toString().slice(0, 200) || null;
+  // Master primaire = dernier Master ayant rechargé ce PDV ; zone = zone du PDV
+  const mq = await pool.query('SELECT master_id FROM uv_recharges WHERE pdv_id=$1 ORDER BY created_at DESC LIMIT 1', [req.user.id]);
+  const masterId = mq.rows.length ? mq.rows[0].master_id : null;
+  const zq = await pool.query('SELECT zone_id, nom_commercial, username FROM users WHERE id=$1', [req.user.id]);
+  const zoneId = zq.rows[0] ? zq.rows[0].zone_id : null;
+  const pdvNom = zq.rows[0] ? (zq.rows[0].nom_commercial || zq.rows[0].username) : 'PDV';
+  const d = await pool.query(
+    "INSERT INTO gam_demandes (pdv_id, master_id, zone_id, type, reseau_id, montant, statut) VALUES ($1,$2,$3,$4,$5,$6,'EN_ATTENTE') RETURNING *",
+    [req.user.id, masterId, zoneId, type, reseauId, montant]);
+  // Notifs temps réel (bip) : Master + commerciaux de la zone
+  const payload = { type: 'demande_new', demande_type: type, montant, pdv: pdvNom };
+  if (masterId) sendToUser(masterId, payload); else broadcastToMasters(payload);
+  if (zoneId) {
+    const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1', [zoneId]);
+    if (z.rows.length) [z.rows[0].responsable_id, z.rows[0].suppleant_id].forEach(uid => { if (uid) sendToUser(uid, payload); });
+  }
+  res.json({ ok: true, demande: d.rows[0] });
+}));
+
+// Le PDV consulte ses demandes
+app.get('/pdv/demandes', requireRole('PDV'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT d.*, rs.nom AS reseau_nom, g.nom AS pris_nom, g.prenoms AS pris_prenoms, g.username AS pris_username
+     FROM gam_demandes d LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id LEFT JOIN users g ON g.id=d.pris_par
+     WHERE d.pdv_id=$1 ORDER BY d.created_at DESC LIMIT 100`, [req.user.id]);
+  res.json(r.rows);
+}));
+
+// Le PDV annule une demande non encore prise en charge
+app.post('/pdv/demandes/:id/cancel', requireRole('PDV'), wrap(async (req, res) => {
+  const upd = await pool.query("UPDATE gam_demandes SET statut='ANNULE', updated_at=now() WHERE id=$1 AND pdv_id=$2 AND statut='EN_ATTENTE' RETURNING *", [req.params.id, req.user.id]);
+  if (!upd.rows.length) return res.status(409).json({ error: 'Impossible d\'annuler : déjà prise en charge ou traitée.' });
+  res.json({ ok: true });
+}));
+
+// Le Master voit les demandes de ses PDV (actives)
+app.get('/master/demandes', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT d.*, p.nom_commercial, p.username AS pdv_username, rs.nom AS reseau_nom,
+            g.nom AS pris_nom, g.prenoms AS pris_prenoms, g.username AS pris_username
+     FROM gam_demandes d
+     LEFT JOIN users p ON p.id=d.pdv_id
+     LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id
+     LEFT JOIN users g ON g.id=d.pris_par
+     WHERE (d.master_id=$1 OR d.master_id IS NULL) AND d.statut IN ('EN_ATTENTE','PRIS')
+     ORDER BY d.created_at DESC`, [req.user.id]);
+  res.json(r.rows);
+}));
+
+// Le Commercial voit les demandes des PDV de sa zone (actives)
+app.get('/commercial/demandes', requireRole('COMMERCIAL'), wrap(async (req, res) => {
+  const zone = await getCommercialZone(req.user.id);
+  if (!zone) return res.json([]);
+  const r = await pool.query(
+    `SELECT d.*, p.nom_commercial, p.username AS pdv_username, rs.nom AS reseau_nom,
+            g.nom AS pris_nom, g.prenoms AS pris_prenoms, g.username AS pris_username
+     FROM gam_demandes d
+     LEFT JOIN users p ON p.id=d.pdv_id
+     LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id
+     LEFT JOIN users g ON g.id=d.pris_par
+     WHERE d.zone_id=$1 AND d.statut IN ('EN_ATTENTE','PRIS')
+     ORDER BY d.created_at DESC`, [zone.id]);
+  res.json(r.rows);
+}));
+
+// Master ou Commercial : « Je m'en occupe » (anti-doublon garanti par le WHERE statut='EN_ATTENTE')
+app.post('/demandes/:id/take', requireRole('MASTER', 'COMMERCIAL'), wrap(async (req, res) => {
+  const nom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
+  const upd = await pool.query(
+    "UPDATE gam_demandes SET statut='PRIS', pris_par=$1, pris_par_role=$2, updated_at=now() WHERE id=$3 AND statut='EN_ATTENTE' RETURNING *",
+    [req.user.id, req.user.role, req.params.id]);
+  if (!upd.rows.length) return res.status(409).json({ error: 'Cette demande a déjà été prise en charge (ou traitée).' });
+  const d = upd.rows[0];
+  sendToUser(d.pdv_id, { type: 'demande_update', statut: 'PRIS', par: nom });
+  if (d.master_id && d.master_id !== req.user.id) sendToUser(d.master_id, { type: 'demande_taken', par: nom });
+  if (d.zone_id) {
+    const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1', [d.zone_id]);
+    if (z.rows.length) [z.rows[0].responsable_id, z.rows[0].suppleant_id].forEach(uid => { if (uid && uid !== req.user.id) sendToUser(uid, { type: 'demande_taken', par: nom }); });
+  }
+  res.json({ ok: true, demande: d });
+}));
+
+// Master ou Commercial : « Servi » (clôture la demande)
+app.post('/demandes/:id/serve', requireRole('MASTER', 'COMMERCIAL'), wrap(async (req, res) => {
+  const upd = await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1 AND statut IN ('EN_ATTENTE','PRIS') RETURNING *", [req.params.id]);
+  if (!upd.rows.length) return res.status(409).json({ error: 'Demande déjà traitée.' });
+  sendToUser(upd.rows[0].pdv_id, { type: 'demande_update', statut: 'SERVI' });
+  res.json({ ok: true });
+}));
+
 /* =====================================================================
    RECOUVREMENT — ESPACE COMMERCIAL
    Le commercial est responsable (ou suppléant) d'une zone. Il passe chez les
@@ -1130,7 +1231,7 @@ app.post('/users/:id/credit', requireRole('SUPERVISEUR'), wrap(async (req, res) 
 /* ---- RÉSEAUX (Wave, Orange Money, Moov Money, Djamo…) : gérés par le superviseur ---- */
 
 // Liste des réseaux (tous pour le superviseur ; les actifs suffisent au Master)
-app.get('/reseaux', requireRole('SUPERVISEUR', 'MASTER'), wrap(async (req, res) => {
+app.get('/reseaux', requireRole('SUPERVISEUR', 'MASTER', 'COMMERCIAL', 'PDV'), wrap(async (req, res) => {
   const r = await pool.query('SELECT id, nom, actif FROM gam_reseaux ORDER BY actif DESC, nom');
   res.json(r.rows);
 }));
