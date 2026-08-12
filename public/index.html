@@ -1371,25 +1371,19 @@
         <form data-form-recharge>
           <div class="form-grid">
             <div class="field span2"><label>Point de vente (PDV)</label><select name="pdv_id" required>${pdvOpts}</select></div>
-            <div class="field span2">
-              <label>Type de recharge</label>
-              <select name="type_fonds" data-rc-type>
-                <option value="UV">UV — vente d'unités (le PDV doit payer en cash)</option>
-                <option value="FCFA">FCFA — avance de cash directe (le PDV doit rembourser)</option>
-              </select>
-            </div>
+            <input type="hidden" name="type_fonds" value="UV">
             <div class="field span2" data-rc-reseau-wrap>
               <label>Réseau de l'UV</label>
-              <select name="reseau_id" data-rc-reseau>${masterReseauOptions()}</select>
+              <select name="reseau_id" data-rc-reseau required>${masterReseauOptions()}</select>
             </div>
-            <div class="field"><label data-rc-label>Montant en UV</label><input name="montant_uv" data-rc-uv type="number" min="0.01" step="any" required placeholder="ex : 50000"></div>
-            <div class="field"><label data-rc-eq-label>Équivalent en FCFA (1 UV = 1 FCFA)</label><input data-rc-fcfa type="number" readonly tabindex="-1" style="background:var(--surface-2);color:var(--ink-soft)" placeholder="calculé automatiquement"></div>
+            <div class="field"><label>Montant en UV</label><input name="montant_uv" data-rc-uv type="number" min="0.01" step="any" required placeholder="ex : 50000"></div>
+            <div class="field"><label>Équivalent en FCFA (1 UV = 1 FCFA)</label><input data-rc-fcfa type="number" readonly tabindex="-1" style="background:var(--surface-2);color:var(--ink-soft)" placeholder="calculé automatiquement"></div>
             <div class="field span2" style="flex-direction:row;align-items:center;gap:8px;display:flex">
               <input type="checkbox" name="paid_now" id="paid_now" style="width:auto">
               <label for="paid_now" style="margin:0" data-rc-paid-label>Le PDV a déjà payé en espèces (encaissement immédiat)</label>
             </div>
           </div>
-          <div style="padding:0 20px 6px;color:var(--ink-soft);font-size:11px" data-rc-hint>Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée — même jour ou plus tard.</div>
+          <div style="padding:0 20px 6px;color:var(--ink-soft);font-size:11px" data-rc-hint>Choisis le réseau d'où sort l'UV. Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée — même jour ou plus tard.</div>
           <div class="msg" data-msg></div>
           <div class="form-actions"><button class="btn" type="submit">Enregistrer la recharge</button></div>
         </form>
@@ -2000,28 +1994,8 @@
     // ---- Recharges UV (Master) ----
     const rf=document.querySelector('form[data-form-recharge]');
     if(rf){
-      const typeIn=rf.querySelector('[data-rc-type]'), uvIn=rf.querySelector('[data-rc-uv]'), fcfaIn=rf.querySelector('[data-rc-fcfa]');
-      const label=rf.querySelector('[data-rc-label]'), eqLabel=rf.querySelector('[data-rc-eq-label]'), paidLabel=rf.querySelector('[data-rc-paid-label]'), hint=rf.querySelector('[data-rc-hint]');
+      const uvIn=rf.querySelector('[data-rc-uv]'), fcfaIn=rf.querySelector('[data-rc-fcfa]');
       if(uvIn && fcfaIn){ uvIn.addEventListener('input', ()=>{ fcfaIn.value=uvIn.value; }); }
-      const reseauWrap=rf.querySelector('[data-rc-reseau-wrap]'), reseauSel=rf.querySelector('[data-rc-reseau]');
-      function applyType(){
-        const isFcfa=typeIn && typeIn.value==='FCFA';
-        if(label) label.textContent=isFcfa?'Montant en FCFA':'Montant en UV';
-        if(eqLabel) eqLabel.textContent=isFcfa?'Équivalent en UV (1 UV = 1 FCFA)':'Équivalent en FCFA (1 UV = 1 FCFA)';
-        if(uvIn) uvIn.placeholder=isFcfa?'ex : 25000':'ex : 50000';
-        if(paidLabel) paidLabel.textContent=isFcfa?'Le PDV a déjà remboursé (immédiat)':'Le PDV a déjà payé (encaissement immédiat)';
-        // Le réseau ne concerne que l'UV
-        if(reseauWrap) reseauWrap.style.display=isFcfa?'none':'';
-        if(reseauSel) reseauSel.required=!isFcfa;
-        if(hint) hint.textContent=isFcfa
-          ? "Cette avance débite ton fonds FCFA. Si le PDV n'a pas encore remboursé, elle reste « en attente » jusqu'au remboursement — même jour ou plus tard."
-          : "Choisis le réseau (Wave, Orange…) d'où sort l'UV. Si le PDV n'a pas encore payé, la recharge reste « en attente » jusqu'à ce que tu la marques payée.";
-      }
-      if(typeIn){ typeIn.addEventListener('change', applyType); applyType(); }
-      // Le sélecteur de mode (espèces / UV) n'apparaît que si le PDV a déjà payé
-      const paidChk=rf.querySelector('#paid_now'), modeWrap=rf.querySelector('[data-rc-mode-wrap]');
-      function applyPaid(){ if(modeWrap) modeWrap.style.display=(paidChk && paidChk.checked)?'':'none'; }
-      if(paidChk){ paidChk.addEventListener('change', applyPaid); applyPaid(); }
       rf.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const msg=rf.querySelector('[data-msg]'); msg.textContent='Enregistrement…'; msg.className='msg';
@@ -2030,7 +2004,7 @@
       try{
         await api('/master/recharges',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
         msg.textContent='✔ Recharge enregistrée'; msg.className='msg ok';
-        await loadMasterData(); renderView();
+        await loadMasterData(); try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){} renderView();
       }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; submitBtn.disabled=false; }
       });
     }
