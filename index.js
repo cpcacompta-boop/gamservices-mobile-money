@@ -836,11 +836,9 @@ app.post('/demandes/:id/take', requireRole('MASTER', 'COMMERCIAL'), wrap(async (
 
 // Master ou Commercial : « Servi » (clôture la demande)
 app.post('/demandes/:id/serve', requireRole('MASTER', 'COMMERCIAL'), wrap(async (req, res) => {
-  if (req.user.role === 'COMMERCIAL') {
-    const chk = await pool.query('SELECT type FROM gam_demandes WHERE id=$1', [req.params.id]);
-    if (chk.rows.length && chk.rows[0].type === 'RECHARGEMENT') {
-      return res.status(403).json({ error: "Une demande de rechargement (UV) est servie par le Master." });
-    }
+  // Seul le Master clôture une demande (« Marquer servi »). Le commercial peut prendre en charge, pas clôturer.
+  if (req.user.role !== 'MASTER') {
+    return res.status(403).json({ error: "Seul le Master peut marquer une demande « servie »." });
   }
   const upd = await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1 AND statut IN ('EN_ATTENTE','PRIS') RETURNING *", [req.params.id]);
   if (!upd.rows.length) return res.status(409).json({ error: 'Demande déjà traitée.' });
