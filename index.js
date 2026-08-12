@@ -690,6 +690,50 @@ app.get('/master/rachats', requireRole('MASTER'), wrap(async (req, res) => {
   res.json(r.rows);
 }));
 
+/* ---- RELEVÉ PARTAGÉ PDV <-> MASTER : historique reçu / réglé / reste, avec "encaissé par" ---- */
+async function buildReleve(opts) {
+  const pdvId = opts.pdvId, masterId = opts.masterId || null, dateStr = opts.dateStr || null;
+  const params = [pdvId]; let itemsWhere = 'rc.pdv_id=$1';
+  if (masterId) { params.push(masterId); itemsWhere += ' AND rc.master_id=$' + params.length; }
+  if (dateStr) { params.push(dateStr); itemsWhere += ' AND rc.created_at::date=$' + params.length + '::date'; }
+  const items = (await pool.query(
+    `SELECT rc.id, rc.created_at, rc.paid_at, rc.montant_fcfa, rc.statut, rc.mode_paiement, rc.regle_par_role,
+            rs.nom AS reseau_nom,
+            m.nom AS master_nom, m.prenoms AS master_prenoms, m.username AS master_username,
+            g.nom AS regle_nom, g.prenoms AS regle_prenoms, g.username AS regle_username
+     FROM uv_recharges rc
+     LEFT JOIN gam_reseaux rs ON rs.id=rc.reseau_id
+     LEFT JOIN users m ON m.id=rc.master_id
+     LEFT JOIN users g ON g.id=rc.regle_par
+     WHERE ${itemsWhere}
+     ORDER BY rc.created_at DESC LIMIT 400`, params)).rows;
+  const sp = [pdvId]; let sw = 'pdv_id=$1';
+  if (masterId) { sp.push(masterId); sw += ' AND master_id=$' + sp.length; }
+  const s = (await pool.query(
+    `SELECT COALESCE(SUM(montant_fcfa),0) AS recu,
+            COALESCE(SUM(montant_fcfa) FILTER (WHERE statut='PAYE'),0) AS regle,
+            COALESCE(SUM(montant_fcfa) FILTER (WHERE statut='EN_ATTENTE'),0) AS reste
+     FROM uv_recharges WHERE ${sw}`, sp)).rows[0];
+  return { items, summary: { recu: Number(s.recu), regle: Number(s.regle), reste: Number(s.reste) } };
+}
+
+// Le PDV consulte son propre relevé
+app.get('/me/releve', requireRole('PDV'), wrap(async (req, res) => {
+  const dateStr = (req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)) ? req.query.date : null;
+  const r = await buildReleve({ pdvId: req.user.id, dateStr });
+  const u = (await pool.query('SELECT nom_commercial, username FROM users WHERE id=$1', [req.user.id])).rows[0] || {};
+  res.json(Object.assign({ pdv: { nom: u.nom_commercial || u.username }, date: dateStr }, r));
+}));
+
+// Le Master consulte le relevé d'un de ses PDV
+app.get('/pdv/:id/releve', requireRole('MASTER'), wrap(async (req, res) => {
+  const dateStr = (req.query.date && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)) ? req.query.date : null;
+  const r = await buildReleve({ pdvId: req.params.id, masterId: req.user.id, dateStr });
+  const u = (await pool.query('SELECT nom_commercial, username FROM users WHERE id=$1', [req.params.id])).rows[0] || {};
+  const me = (await pool.query('SELECT nom, prenoms, username FROM users WHERE id=$1', [req.user.id])).rows[0] || {};
+  res.json(Object.assign({ pdv: { nom: u.nom_commercial || u.username }, master: { nom: [me.nom, me.prenoms].filter(Boolean).join(' ') || me.username }, date: dateStr }, r));
+}));
+
 /* =====================================================================
    RECOUVREMENT — ESPACE COMMERCIAL
    Le commercial est responsable (ou suppléant) d'une zone. Il passe chez les
