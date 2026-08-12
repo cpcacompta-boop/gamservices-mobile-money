@@ -646,14 +646,15 @@
     rapports:'<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6M9 9h2"/>',
     reseaux:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     retours:'<path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/>',
-    releve:'<path d="M6 2h9l4 4v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v5h5"/><path d="M9 12h6M9 16h6M9 8h3"/>'
+    releve:'<path d="M6 2h9l4 4v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v5h5"/><path d="M9 12h6M9 16h6M9 8h3"/>',
+    demandes:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Rechargement'},{id:'retours',label:'Retours'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'},{id:'releve',label:'Mon relevé'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Rechargement'},{id:'retours',label:'Retours'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'},{id:'releve',label:'Mon relevé'},{id:'demandes',label:'Demandes'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'reseaux',label:'Réseaux'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','retours','caisse','rapports'], COMMERCIAL:['dashboard','recouvrement','caisse'], PDV:['dashboard','releve'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','retours','caisse','rapports','demandes'], COMMERCIAL:['dashboard','recouvrement','caisse','demandes'], PDV:['dashboard','releve','demandes'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -665,8 +666,8 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Rechargement', retours:'Retours', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports', releve:'Mon relevé' };
-  async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); }
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Rechargement', retours:'Retours', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports', releve:'Mon relevé', demandes:'Demandes' };
+  async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); if(v==='demandes') setDemandesBadge(false); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
     try{ S.pdvs=await api('/pdvs'); }catch(e){ S.pdvs=S.pdvs||[]; }
@@ -721,8 +722,14 @@
       try{ S.pdvs=await api('/pdvs'); }catch(e){ S.pdvs=S.pdvs||[]; }
       try{ S.rachats=await api('/master/rachats'); }catch(e){ S.rachats=S.rachats||[]; }
     }
+    if(v==='demandes'){
+      const role=S.auth.user.role;
+      const url=role==='PDV'?'/pdv/demandes':(role==='MASTER'?'/master/demandes':'/commercial/demandes');
+      try{ S.demandes=await api(url); }catch(e){ S.demandes=S.demandes||[]; }
+      if(role==='PDV'){ try{ S.reseaux=await api('/reseaux'); }catch(e){ S.reseaux=S.reseaux||[]; } }
+    }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,retours:renderRetours,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports,releve:renderReleve}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,retours:renderRetours,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports,releve:renderReleve,demandes:renderDemandes}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -1377,6 +1384,60 @@
     body+='<div style="margin-top:12px"></div>'+reportTable(['Date','Réseau','Montant','Réglé en','Encaissé par','Statut'], rows.length?rows:[['—','—','0','—','—','—']]);
     body+=signatureBlock('Le Point de vente','Le Master');
     printReport(reportShell('Relevé de compte — Point de vente', body));
+  }
+
+  /* ---------- DEMANDES (PDV -> Master + Commercial, temps réel) ---------- */
+  function beep(){ try{ const C=window.AudioContext||window.webkitAudioContext; if(!C) return; const ctx=new C(); const o=ctx.createOscillator(), g=ctx.createGain(); o.connect(g); g.connect(ctx.destination); o.type='sine'; o.frequency.value=880; g.gain.setValueAtTime(0.0001,ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.25,ctx.currentTime+0.01); g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+0.4); o.start(); o.stop(ctx.currentTime+0.42); }catch(e){} }
+  function setDemandesBadge(on){ const b=document.querySelector('nav button[data-view="demandes"]'); if(!b) return; let dot=b.querySelector('.nav-dot'); if(on){ if(!dot){ dot=document.createElement('span'); dot.className='nav-dot'; dot.style.cssText='margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--red);flex-shrink:0;box-shadow:0 0 6px var(--red)'; b.appendChild(dot); } } else if(dot){ dot.remove(); } }
+  function demTypePill(t){ return t==='RETOUR'
+    ? '<span class="pill" style="background:#E4ECFB;color:var(--brand)">Retour</span>'
+    : '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Rechargement</span>'; }
+  function demStatutPill(d){
+    if(d.statut==='EN_ATTENTE') return '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">En attente</span>';
+    if(d.statut==='PRIS') return '<span class="pill" style="background:#E4ECFB;color:var(--brand)">Pris en charge</span>';
+    if(d.statut==='SERVI') return '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Servi ✔</span>';
+    if(d.statut==='ANNULE') return '<span class="pill" style="background:var(--red-soft);color:var(--red)">Annulé</span>';
+    return esc(d.statut);
+  }
+  async function reloadDemandes(){
+    const role=S.auth.user.role;
+    const url=role==='PDV'?'/pdv/demandes':(role==='MASTER'?'/master/demandes':'/commercial/demandes');
+    try{ S.demandes=await api(url); }catch(e){}
+  }
+  function renderDemandes(){ return S.auth.user.role==='PDV'?renderDemandesPdv():renderDemandesAgent(); }
+
+  function renderDemandesPdv(){
+    const list=S.demandes||[];
+    const reseauxOpts='<option value="">— réseau —</option>'+((S.reseaux||[]).filter(function(r){return r.actif;}).map(function(r){return '<option value="'+r.id+'">'+esc(r.nom)+'</option>';}).join(''));
+    const header=`<div class="welcome"><h2>Demandes 🔔</h2><p>Demande à ton Master (et au commercial de ta zone) de te servir : rechargement ou retour.</p></div>`;
+    const form='<div class="panel"><div class="panel-head"><h3>Nouvelle demande</h3></div>'+
+      '<form data-form-demande><div class="form-grid">'+
+        '<div class="field"><label>Type de demande</label><select name="type"><option value="RECHARGEMENT">🟢 Rechargement (je veux de l\'UV)</option><option value="RETOUR">🔵 Retour (je veux rendre de l\'UV)</option></select></div>'+
+        '<div class="field"><label>Réseau</label><select name="reseau_id">'+reseauxOpts+'</select></div>'+
+        '<div class="field span2"><label>Montant (UV)</label><input name="montant" type="number" min="0" step="any" placeholder="ex : 50000"></div>'+
+      '</div><div class="msg" data-msg></div><div class="form-actions"><button class="btn" type="submit">Envoyer la demande</button></div></form></div>';
+    const rows=list.length?list.map(function(d){
+      return '<tr><td>'+demTypePill(d.type)+'</td><td>'+esc(d.reseau_nom||'—')+'</td><td>'+(Number(d.montant)>0?fmtUv(d.montant)+' UV':'—')+'</td><td>'+demStatutPill(d)+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(d.created_at)+'</td>'+
+        '<td>'+(d.statut==='EN_ATTENTE'?'<button class="btn small" style="background:var(--red-soft);color:var(--red)" data-dem-cancel="'+d.id+'" type="button">Annuler</button>':'—')+'</td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="6">Aucune demande</td></tr>';
+    const table='<div class="panel"><div class="panel-head"><h3>Mes demandes</h3></div><div class="table-wrap"><table><thead><tr><th>Type</th><th>Réseau</th><th>Montant</th><th>Statut</th><th>Depuis</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    return header+form+table;
+  }
+
+  function renderDemandesAgent(){
+    const list=S.demandes||[];
+    const enAttente=list.filter(function(d){return d.statut==='EN_ATTENTE';}).length;
+    const header=`<div class="welcome"><h2>Demandes 🔔</h2><p>Les demandes de tes PDV en temps réel. Clique « Je m'en occupe » pour éviter que deux personnes se déplacent.</p></div>
+      <div class="stat-row"><div class="stat${enAttente>0?' red':''}"><div class="lbl">En attente</div><div class="num">${enAttente}</div></div><div class="stat"><div class="lbl">Total actives</div><div class="num">${list.length}</div></div></div>`;
+    const rows=list.length?list.map(function(d){
+      const pdv=d.nom_commercial||d.pdv_username||'—';
+      const pris=[d.pris_nom,d.pris_prenoms].filter(Boolean).join(' ')||d.pris_username||'';
+      const action=d.statut==='EN_ATTENTE'
+        ? '<button class="btn small" data-dem-take="'+d.id+'" type="button">Je m\'en occupe</button>'
+        : '<button class="btn small" data-dem-serve="'+d.id+'" type="button">Marquer servi</button>';
+      return '<tr><td><b>'+esc(pdv)+'</b></td><td>'+demTypePill(d.type)+'</td><td>'+esc(d.reseau_nom||'—')+'</td><td>'+(Number(d.montant)>0?fmtUv(d.montant)+' UV':'—')+'</td><td>'+demStatutPill(d)+(pris?' <span style="font-size:11px;color:var(--ink-soft)">'+esc(pris)+'</span>':'')+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(d.created_at)+'</td><td style="white-space:nowrap">'+action+'</td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="7">Aucune demande active ✔</td></tr>';
+    return header+'<div class="panel"><div class="panel-head"><h3>Demandes actives</h3></div><div class="table-wrap"><table><thead><tr><th>PDV</th><th>Type</th><th>Réseau</th><th>Montant</th><th>Statut</th><th>Depuis</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
   }
 
   function renderRetours(){
@@ -2108,6 +2169,35 @@
       }
       catch(err){ b.disabled=false; b.textContent='Marquer payé'; dlgError('Erreur', err.message); }
     }));
+    // ---- Demandes ----
+    const demForm=document.querySelector('form[data-form-demande]');
+    if(demForm) demForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg=demForm.querySelector('[data-msg]'); const d=Object.fromEntries(new FormData(demForm).entries());
+      msg.textContent='Envoi…'; msg.className='msg'; const btn=demForm.querySelector('button[type=submit]'); btn.disabled=true;
+      try{
+        await api('/pdv/demandes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        await reloadDemandes(); renderView();
+        dlgSuccess('Demande envoyée','Ton Master et le commercial de ta zone ont été notifiés. Tu verras ici quand quelqu\'un s\'en occupe.');
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+    });
+    document.querySelectorAll('[data-dem-cancel]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Annuler la demande ?','',{type:'warn',okText:'Oui, annuler'}); if(!ok) return;
+      b.disabled=true;
+      try{ await api('/pdv/demandes/'+b.dataset.demCancel+'/cancel',{method:'POST'}); await reloadDemandes(); renderView(); }
+      catch(err){ b.disabled=false; dlgError('Erreur', err.message); }
+    }));
+    document.querySelectorAll('[data-dem-take]').forEach(b=>b.addEventListener('click', async ()=>{
+      b.disabled=true; b.textContent='…';
+      try{ await api('/demandes/'+b.dataset.demTake+'/take',{method:'POST'}); await reloadDemandes(); renderView(); dlgSuccess('C\'est noté','Tu es en charge de cette demande. Le PDV et l\'autre agent sont informés.'); }
+      catch(err){ await reloadDemandes(); renderView(); dlgError('Déjà pris', err.message); }
+    }));
+    document.querySelectorAll('[data-dem-serve]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Marquer comme servi ?','Confirme que la demande a bien été traitée.',{type:'success',okText:'Oui, servi'}); if(!ok) return;
+      b.disabled=true; b.textContent='…';
+      try{ await api('/demandes/'+b.dataset.demServe+'/serve',{method:'POST'}); await reloadDemandes(); renderView(); }
+      catch(err){ await reloadDemandes(); renderView(); dlgError('Erreur', err.message); }
+    }));
     // ---- Relevé partagé ----
     const relDate=document.querySelector('[data-releve-date]');
     if(relDate) relDate.addEventListener('change', ()=>{ S.releveDate=relDate.value||null; loadView('releve').then(renderView); });
@@ -2442,6 +2532,21 @@
         vibrate([80,40,80]);
         dlgError('Versement rejeté', 'Le Master déclare ne pas avoir reçu '+fmtFcfa(d.montant)+' FCFA. Le montant est de nouveau en main — rapproche-toi de lui.');
         if(S.view==='caisse') loadView('caisse').then(renderView);
+      } else if(d.type==='demande_new'){
+        // Agent (Master/Commercial) : nouvelle demande d'un PDV -> bip + badge
+        beep(); vibrate([120,60,120]);
+        setDemandesBadge(true);
+        if(S.view==='demandes'){ reloadDemandes().then(renderView); }
+        else { dlgSuccess('Nouvelle demande '+(d.demande_type==='RETOUR'?'de retour':'de rechargement'), (d.pdv||'Un PDV')+' demande'+(Number(d.montant)>0?' '+fmtUv(d.montant)+' UV':'')+'. Va dans « Demandes ».'); }
+      } else if(d.type==='demande_taken'){
+        // Agent : la demande a été prise par l'autre -> on rafraîchit
+        if(S.view==='demandes'){ reloadDemandes().then(renderView); }
+      } else if(d.type==='demande_update'){
+        // PDV : statut de sa demande a changé
+        vibrate([60,40,60]);
+        if(d.statut==='PRIS') dlgSuccess('Demande prise en charge', (d.par||'Quelqu\'un')+' s\'occupe de ta demande.');
+        else if(d.statut==='SERVI') dlgSuccess('Demande servie', 'Ta demande a été traitée. ✔');
+        if(S.view==='demandes'){ reloadDemandes().then(renderView); }
       } else if(d.type==='recharge_alert'){
         // Recharge restée en attente depuis un jour précédent — alerte, elle reste "en attente"
         vibrate([100,60,100,60,100]);
