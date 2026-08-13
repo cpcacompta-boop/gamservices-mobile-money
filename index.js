@@ -242,6 +242,7 @@ async function ensureReseaux() {
     "CREATE TABLE IF NOT EXISTS gam_rachats_uv (id SERIAL PRIMARY KEY, master_id INTEGER, pdv_id INTEGER, reseau_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now())",
     "CREATE TABLE IF NOT EXISTS gam_demandes (id SERIAL PRIMARY KEY, pdv_id INTEGER, master_id INTEGER, zone_id INTEGER, type TEXT NOT NULL, reseau_id INTEGER, montant NUMERIC DEFAULT 0, statut TEXT NOT NULL DEFAULT 'EN_ATTENTE', pris_par INTEGER, pris_par_role TEXT, note TEXT, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now())",
     "CREATE INDEX IF NOT EXISTS gam_demandes_statut ON gam_demandes(statut, created_at DESC)",
+    "ALTER TABLE gam_demandes ADD COLUMN IF NOT EXISTS reseau2_id INTEGER",
     "CREATE TABLE IF NOT EXISTS gam_retours_commercial (id SERIAL PRIMARY KEY, commercial_id INTEGER, master_id INTEGER, pdv_id INTEGER, reseau_id INTEGER, montant NUMERIC NOT NULL DEFAULT 0, deduit BOOLEAN NOT NULL DEFAULT FALSE, versement_id INTEGER, created_at TIMESTAMPTZ DEFAULT now())",
     "CREATE INDEX IF NOT EXISTS gam_retours_comm ON gam_retours_commercial(commercial_id, master_id)"
   ];
@@ -744,23 +745,29 @@ app.get('/pdv/:id/releve', requireRole('MASTER'), wrap(async (req, res) => {
 
 // Le PDV crée une demande
 app.post('/pdv/demandes', requireRole('PDV'), wrap(async (req, res) => {
-  const type = req.body.type === 'RETOUR' ? 'RETOUR' : 'RECHARGEMENT';
+  const type = ['RETOUR', 'ECHANGE'].includes(req.body.type) ? req.body.type : 'RECHARGEMENT';
   const montant = numOrNaN(req.body.montant) || 0;
-  const reseauId = Number(req.body.reseau_id) || null;
+  const reseauId = Number(req.body.reseau_id) || null;   // ECHANGE : réseau DONNÉ par le PDV
+  const reseau2Id = type === 'ECHANGE' ? (Number(req.body.reseau2_id) || null) : null; // réseau REÇU
   const note = (req.body.note || '').toString().slice(0, 200) || null;
-  // Master primaire = dernier Master ayant rechargé ce PDV ; zone = zone du PDV
+  if (!(montant > 0)) return res.status(400).json({ error: 'Indique le montant' });
+  if (!reseauId) return res.status(400).json({ error: 'Choisis le réseau' });
+  if (type === 'ECHANGE') {
+    if (!reseau2Id) return res.status(400).json({ error: 'Choisis le réseau que tu veux recevoir' });
+    if (reseau2Id === reseauId) return res.status(400).json({ error: 'Les deux réseaux doivent être différents' });
+  }
   const mq = await pool.query('SELECT master_id FROM uv_recharges WHERE pdv_id=$1 ORDER BY created_at DESC LIMIT 1', [req.user.id]);
   const masterId = mq.rows.length ? mq.rows[0].master_id : null;
   const zq = await pool.query('SELECT zone_id, nom_commercial, username FROM users WHERE id=$1', [req.user.id]);
   const zoneId = zq.rows[0] ? zq.rows[0].zone_id : null;
   const pdvNom = zq.rows[0] ? (zq.rows[0].nom_commercial || zq.rows[0].username) : 'PDV';
   const d = await pool.query(
-    "INSERT INTO gam_demandes (pdv_id, master_id, zone_id, type, reseau_id, montant, statut) VALUES ($1,$2,$3,$4,$5,$6,'EN_ATTENTE') RETURNING *",
-    [req.user.id, masterId, zoneId, type, reseauId, montant]);
-  // Notifs temps réel (bip) : Master + commerciaux de la zone
+    "INSERT INTO gam_demandes (pdv_id, master_id, zone_id, type, reseau_id, reseau2_id, montant, statut) VALUES ($1,$2,$3,$4,$5,$6,$7,'EN_ATTENTE') RETURNING *",
+    [req.user.id, masterId, zoneId, type, reseauId, reseau2Id, montant]);
+  // Notifs temps réel (bip) : Master toujours. Commerciaux SEULEMENT si cash concerné (pas pour l'échange UV).
   const payload = { type: 'demande_new', demande_type: type, montant, pdv: pdvNom };
   if (masterId) sendToUser(masterId, payload); else broadcastToMasters(payload);
-  if (zoneId) {
+  if (zoneId && type !== 'ECHANGE') {
     const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1', [zoneId]);
     if (z.rows.length) [z.rows[0].responsable_id, z.rows[0].suppleant_id].forEach(uid => { if (uid) sendToUser(uid, payload); });
   }
@@ -770,8 +777,8 @@ app.post('/pdv/demandes', requireRole('PDV'), wrap(async (req, res) => {
 // Le PDV consulte ses demandes
 app.get('/pdv/demandes', requireRole('PDV'), wrap(async (req, res) => {
   const r = await pool.query(
-    `SELECT d.*, rs.nom AS reseau_nom, g.nom AS pris_nom, g.prenoms AS pris_prenoms, g.username AS pris_username
-     FROM gam_demandes d LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id LEFT JOIN users g ON g.id=d.pris_par
+    `SELECT d.*, rs.nom AS reseau_nom, rs2.nom AS reseau2_nom, g.nom AS pris_nom, g.prenoms AS pris_prenoms, g.username AS pris_username
+     FROM gam_demandes d LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id LEFT JOIN gam_reseaux rs2 ON rs2.id=d.reseau2_id LEFT JOIN users g ON g.id=d.pris_par
      WHERE d.pdv_id=$1 ORDER BY d.created_at DESC LIMIT 100`, [req.user.id]);
   res.json(r.rows);
 }));
@@ -786,13 +793,14 @@ app.post('/pdv/demandes/:id/cancel', requireRole('PDV'), wrap(async (req, res) =
 // Le Master voit les demandes de ses PDV (actives)
 app.get('/master/demandes', requireRole('MASTER'), wrap(async (req, res) => {
   const r = await pool.query(
-    `SELECT d.*, p.nom_commercial, p.username AS pdv_username, rs.nom AS reseau_nom,
+    `SELECT d.*, p.nom_commercial, p.username AS pdv_username, rs.nom AS reseau_nom, rs2.nom AS reseau2_nom,
             g.nom AS pris_nom, g.prenoms AS pris_prenoms, g.username AS pris_username
      FROM gam_demandes d
      LEFT JOIN users p ON p.id=d.pdv_id
      LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id
+     LEFT JOIN gam_reseaux rs2 ON rs2.id=d.reseau2_id
      LEFT JOIN users g ON g.id=d.pris_par
-     WHERE (d.master_id=$1 OR d.master_id IS NULL) AND d.statut IN ('EN_ATTENTE','PRIS')
+     WHERE (d.master_id=$1 OR d.master_id IS NULL) AND d.statut IN ('EN_ATTENTE','PRIS','UV_RECU')
      ORDER BY d.created_at DESC`, [req.user.id]);
   res.json(r.rows);
 }));
@@ -808,7 +816,7 @@ app.get('/commercial/demandes', requireRole('COMMERCIAL'), wrap(async (req, res)
      LEFT JOIN users p ON p.id=d.pdv_id
      LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id
      LEFT JOIN users g ON g.id=d.pris_par
-     WHERE d.zone_id=$1 AND d.statut IN ('EN_ATTENTE','PRIS')
+     WHERE d.zone_id=$1 AND d.type <> 'ECHANGE' AND d.statut IN ('EN_ATTENTE','PRIS')
      ORDER BY d.created_at DESC`, [zone.id]);
   res.json(r.rows);
 }));
@@ -846,6 +854,45 @@ app.post('/demandes/:id/serve', requireRole('MASTER', 'COMMERCIAL'), wrap(async 
   const upd = await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1 AND statut IN ('EN_ATTENTE','PRIS') RETURNING *", [req.params.id]);
   if (!upd.rows.length) return res.status(409).json({ error: 'Demande déjà traitée.' });
   sendToUser(upd.rows[0].pdv_id, { type: 'demande_update', statut: 'SERVI' });
+  res.json({ ok: true });
+}));
+
+/* ---- ÉCHANGE UV (escrow anti-arnaque) : le PDV envoie d'abord, le Master sert ensuite ---- */
+// Étape 1 : le Master confirme avoir REÇU l'UV du PDV (réseau donné) -> ce réseau monte chez le Master
+app.post('/demandes/:id/echange-recu', requireRole('MASTER'), wrap(async (req, res) => {
+  const dq = await pool.query("SELECT * FROM gam_demandes WHERE id=$1 AND type='ECHANGE'", [req.params.id]);
+  if (!dq.rows.length) return res.status(404).json({ error: 'Échange introuvable' });
+  const d = dq.rows[0];
+  if (d.master_id && Number(d.master_id) !== req.user.id) return res.status(403).json({ error: 'Cet échange ne te concerne pas' });
+  if (d.statut !== 'EN_ATTENTE') return res.status(409).json({ error: 'Réception déjà confirmée ou échange traité.' });
+  const montant = Number(d.montant);
+  // Le PDV a envoyé son UV sur le réseau DONNÉ -> le solde de ce réseau monte chez le Master
+  await pool.query('INSERT INTO gam_solde_reseau (master_id, reseau_id, solde_uv) VALUES ($1,$2,$3) ON CONFLICT (master_id, reseau_id) DO UPDATE SET solde_uv = gam_solde_reseau.solde_uv + $3', [req.user.id, d.reseau_id, montant]);
+  await pool.query('UPDATE users SET solde_uv=solde_uv+$1 WHERE id=$2', [montant, req.user.id]);
+  await pool.query("UPDATE gam_demandes SET statut='UV_RECU', master_id=$1, pris_par=$1, pris_par_role='MASTER', updated_at=now() WHERE id=$2", [req.user.id, d.id]);
+  sendToUser(d.pdv_id, { type: 'demande_update', statut: 'UV_RECU' });
+  res.json({ ok: true });
+}));
+
+// Étape 2 : le Master ENVOIE l'UV demandé (réseau reçu) -> ce réseau baisse. Bloqué si solde insuffisant.
+app.post('/demandes/:id/echange-servir', requireRole('MASTER'), wrap(async (req, res) => {
+  const dq = await pool.query("SELECT * FROM gam_demandes WHERE id=$1 AND type='ECHANGE'", [req.params.id]);
+  if (!dq.rows.length) return res.status(404).json({ error: 'Échange introuvable' });
+  const d = dq.rows[0];
+  if (Number(d.master_id) !== req.user.id) return res.status(403).json({ error: 'Cet échange ne te concerne pas' });
+  if (d.statut !== 'UV_RECU') return res.status(409).json({ error: "Tu dois d'abord confirmer la réception de l'UV du PDV." });
+  const montant = Number(d.montant);
+  // Garde : le Master doit avoir assez d'UV sur le réseau demandé
+  const b = await pool.query('SELECT solde_uv FROM gam_solde_reseau WHERE master_id=$1 AND reseau_id=$2', [req.user.id, d.reseau2_id]);
+  const bal = b.rows.length ? Number(b.rows[0].solde_uv) : 0;
+  if (montant > bal) {
+    const rn = await pool.query('SELECT nom FROM gam_reseaux WHERE id=$1', [d.reseau2_id]);
+    return res.status(400).json({ error: 'UV insuffisant sur ' + (rn.rows[0] ? rn.rows[0].nom : 'ce réseau') + ' (disponible : ' + bal + ')' });
+  }
+  await pool.query('UPDATE gam_solde_reseau SET solde_uv=solde_uv-$1 WHERE master_id=$2 AND reseau_id=$3', [montant, req.user.id, d.reseau2_id]);
+  await pool.query('UPDATE users SET solde_uv=solde_uv-$1 WHERE id=$2', [montant, req.user.id]);
+  await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1", [d.id]);
+  sendToUser(d.pdv_id, { type: 'demande_update', statut: 'SERVI' });
   res.json({ ok: true });
 }));
 
