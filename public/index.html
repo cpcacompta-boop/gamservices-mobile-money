@@ -942,6 +942,22 @@
     printReport(reportShell('Fiche de point journalier — Master & Commercial', body));
   }
 
+  // Impression globale du point Commercial <-> Master (tous les commerciaux)
+  function printPointCommercial(report){
+    report=report||{}; const date=(report.jour&&report.jour.date)||report.date||''; const master=(report.master&&report.master.nom)||'';
+    const coms=(report.point&&report.point.commerciaux)||[];
+    let body='<div style="font-size:12px;margin-bottom:8px"><b>Date :</b> '+esc(date)+' &nbsp;&nbsp;&nbsp; <b>Master :</b> '+esc(master)+'</div>';
+    const rows=coms.map(function(c){ const net=c.net!=null?c.net:(c.total-(c.retours||0));
+      return [esc(c.commercial_nom)+(c.zone_nom?' ('+esc(c.zone_nom)+')':''), fmtFcfa(c.total), fmtFcfa(c.retours||0), '<b>'+fmtFcfa(net)+'</b>']; });
+    const tEnc=coms.reduce(function(s,c){return s+Number(c.total||0);},0);
+    const tRet=coms.reduce(function(s,c){return s+Number(c.retours||0);},0);
+    const tNet=coms.reduce(function(s,c){return s+Number(c.net!=null?c.net:(c.total-(c.retours||0)));},0);
+    rows.push(['TOTAL ('+coms.length+')','<b>'+fmtFcfa(tEnc)+'</b>','<b>'+fmtFcfa(tRet)+'</b>','<b>'+fmtFcfa(tNet)+'</b>']);
+    body+=reportTable(['Commercial','Encaissé (PDV)','Retours payés','Net à reverser'], rows.length?rows:[['—','0','0','0']]);
+    body+=signatureBlock('Le Master','Le Superviseur');
+    printReport(reportShell('Point Commercial ↔ Master', body));
+  }
+
   function printArreteMaster(report){
     if(!report){ return; }
     const f=report.fund||{}; const j=report.jour||{};
@@ -1029,35 +1045,36 @@
     if(!r){ return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;text-align:center">Chargement…</div></div>'; }
     const rep=r.report||{}; const closed=!!r.closed; const dateStr=r.date||'';
     const header=`<div class="welcome"><h2>Points &amp; Rapports 📑</h2><p>Le point officiel du jour, à imprimer et faire signer. Une fois clôturé, le rapport est figé et archivé.</p></div>`;
-    let statusBar='<div class="panel"><div style="padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+    const _d=dateStr?new Date(dateStr+'T00:00:00'):new Date();
+    const _prev=new Date(_d); _prev.setDate(_prev.getDate()-1); const prevStr=_prev.toISOString().slice(0,10);
+    const _next=new Date(_d); _next.setDate(_next.getDate()+1); const nextStr=_next.toISOString().slice(0,10);
+    const _y=new Date(); _y.setDate(_y.getDate()-1); const yStr=_y.toISOString().slice(0,10);
+    const _today=new Date().toISOString().slice(0,10);
+    let statusBar='<div class="panel"><div style="padding:12px 20px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
       '<label style="font-size:11px;color:var(--ink-soft);font-weight:700">Jour :</label>'+
-      '<input type="date" data-rap-date value="'+esc(dateStr)+'" style="max-width:170px">'+
+      '<button class="btn small" data-rap-goto="'+prevStr+'" type="button" title="Jour précédent">◀</button>'+
+      '<input type="date" data-rap-date value="'+esc(dateStr)+'" max="'+esc(_today)+'" style="max-width:160px">'+
+      '<button class="btn small" data-rap-goto="'+nextStr+'" type="button" title="Jour suivant"'+(dateStr>=_today?' disabled style="opacity:.4"':'')+'>▶</button>'+
+      '<button class="btn small" data-rap-goto="'+yStr+'" type="button">Hier</button>'+
       '<button class="btn small" data-rap-today type="button">Aujourd\'hui</button>'+
       (closed?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Clôturé</span>'+(r.cloture_info?'<span style="font-size:11px;color:var(--ink-soft)">'+esc(timeAgo(r.cloture_info.created_at))+' · '+esc(r.cloture_info.par||'')+'</span>':''):'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">Non clôturé</span>')+
       '</div></div>';
-    // Niveau 1 — PDV
-    const pdvs=(rep.point&&rep.point.pdvs)||[];
-    const rapSearch=(S.rapPdvSearch||'').toLowerCase();
-    const pdvsF=rapSearch?pdvs.filter(function(p){return String(p.pdv||'').toLowerCase().includes(rapSearch);}):pdvs;
-    const totEnc=pdvsF.reduce(function(s,p){return s+Number(p.encaisse_jour||0);},0);
-    const totReste=pdvsF.reduce(function(s,p){return s+Number(p.reste||0);},0);
-    const pdvPanel='<div class="panel"><div class="panel-head"><h3>Niveau 1 — Point des PDV</h3><span class="hint">Point de chaque PDV : encaissé, reste — imprimable et filtrable</span></div>'+
-      '<div style="padding:10px 20px"><input type="text" data-rap-pdv-search placeholder="🔎 Rechercher un point de vente…" value="'+esc(S.rapPdvSearch||'')+'" style="max-width:280px"></div>'+
-      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>Encaissé (jour)</th><th>Reste</th><th>État</th><th>Fiche</th></tr></thead><tbody>'+
-      (pdvsF.length?pdvsF.map(function(p){ const fait=Number(p.reste||0)===0;
-        const btn=p.pdv_id?'<button class="btn small" data-rap-pdv-fiche="'+p.pdv_id+'" data-pdv-nom="'+esc(p.pdv)+'" type="button">🖨️ Fiche</button>':'—';
-        return '<tr><td>'+esc(p.pdv)+'</td><td><b>'+fmtFcfa(p.encaisse_jour)+'</b> FCFA</td><td>'+fmtFcfa(p.reste)+' FCFA</td><td>'+(fait?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Fait ✔</span>':'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">À finir</span>')+'</td><td>'+btn+'</td></tr>';
-      }).join(''):'<tr class="empty-row"><td colspan="5">Aucun PDV'+(rapSearch?' pour cette recherche':' ce jour')+'</td></tr>')+
-      '<tr style="border-top:2px solid var(--line);font-weight:700"><td>TOTAL ('+pdvsF.length+')</td><td>'+fmtFcfa(totEnc)+' FCFA</td><td>'+fmtFcfa(totReste)+' FCFA</td><td colspan="2"></td></tr>'+
-      '</tbody></table></div></div>';
-    // Niveau 2 — Commercial
-    const coms=(rep.point&&rep.point.commerciaux)||[];
+    // Niveau 2 — Point Commercial ↔ Master (arrêté + bouton d'impression global)
+    const comsAll=(rep.point&&rep.point.commerciaux)||[];
+    const comSearch=(S.rapComSearch||'').toLowerCase();
+    const coms=comSearch?comsAll.filter(function(c){return (String(c.commercial_nom||'')+' '+String(c.zone_nom||'')).toLowerCase().includes(comSearch);}):comsAll;
+    const cTotEnc=coms.reduce(function(s,c){return s+Number(c.total||0);},0);
+    const cTotRet=coms.reduce(function(s,c){return s+Number(c.retours||0);},0);
+    const cTotNet=coms.reduce(function(s,c){return s+Number(c.net!=null?c.net:(c.total-(c.retours||0)));},0);
     const comPanel='<div class="panel"><div class="panel-head"><h3>Niveau 2 — Point Commercial ↔ Master</h3><span class="hint">Ce que chaque commercial a encaissé des PDV, ses retours, et son net à reverser</span></div>'+
-      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Encaissé (PDV)</th><th>Retours payés</th><th>Net à reverser</th><th>Fiche</th></tr></thead><tbody>'+
-      (coms.length?coms.map(function(cm,i){ const net=cm.net!=null?cm.net:(cm.total-(cm.retours||0));
-        return '<tr><td>'+esc(cm.commercial_nom)+(cm.zone_nom?' <span style="color:var(--ink-soft);font-size:11px">('+esc(cm.zone_nom)+')</span>':'')+'</td><td><b>'+fmtFcfa(cm.total)+'</b> FCFA</td><td>'+fmtFcfa(cm.retours||0)+' FCFA</td><td><b>'+fmtFcfa(net)+'</b> FCFA</td><td><button class="btn small" data-rap-fiche="'+i+'" type="button">🖨️ Imprimer</button></td></tr>';
-      }).join(''):'<tr class="empty-row"><td colspan="5">Aucun commercial actif ce jour</td></tr>')+
-      '</tbody></table></div></div>';
+      '<div style="padding:10px 20px"><input type="text" data-rap-com-search placeholder="🔎 Rechercher un commercial ou une zone…" value="'+esc(S.rapComSearch||'')+'" style="max-width:300px"></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th style="text-align:right">Encaissé (PDV)</th><th style="text-align:right">Retours payés</th><th style="text-align:right">Net à reverser</th></tr></thead><tbody>'+
+      (coms.length?coms.map(function(cm){ const net=cm.net!=null?cm.net:(cm.total-(cm.retours||0));
+        return '<tr><td>'+esc(cm.commercial_nom)+(cm.zone_nom?' <span style="color:var(--ink-soft);font-size:11px">('+esc(cm.zone_nom)+')</span>':'')+'</td><td style="text-align:right"><b>'+fmtFcfa(cm.total)+'</b> FCFA</td><td style="text-align:right">'+fmtFcfa(cm.retours||0)+' FCFA</td><td style="text-align:right"><b>'+fmtFcfa(net)+'</b> FCFA</td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="4">Aucun commercial'+(comSearch?' pour cette recherche':' actif ce jour')+'</td></tr>')+
+      '<tr style="border-top:2px solid var(--line);font-weight:700"><td>TOTAL ('+coms.length+')</td><td style="text-align:right">'+fmtFcfa(cTotEnc)+' FCFA</td><td style="text-align:right">'+fmtFcfa(cTotRet)+' FCFA</td><td style="text-align:right">'+fmtFcfa(cTotNet)+' FCFA</td></tr>'+
+      '</tbody></table></div>'+
+      '<div style="padding:12px 20px"><button class="btn small" data-rap-print-com type="button">🖨️ Imprimer le point (Commercial ↔ Master)</button></div></div>';
     // Fonds de roulement : UV par réseau + FCFA
     const reseaux=rep.reseaux||[];
     const totalUv=reseaux.reduce(function(s,r){return s+Number(r.solde_uv||0);},0);
@@ -1108,7 +1125,7 @@
         return '<tr><td>'+esc(a.date)+'</td><td>'+fmtFcfa(a.net)+' FCFA</td><td>'+(Number(a.manquant)>0?'<b style="color:var(--red)">'+fmtFcfa(a.manquant)+'</b>':fmtFcfa(a.manquant))+' FCFA</td><td><button class="btn small" data-rap-open="'+esc(a.date)+'" type="button">Ouvrir</button></td></tr>';
       }).join(''):'<tr class="empty-row"><td colspan="4">Aucune clôture pour le moment</td></tr>')+
       '</tbody></table></div></div>';
-    return header+statusBar+fondsRoulementPanel+pdvPanel+comPanel+arretePanel+closePanel+archPanel;
+    return header+statusBar+fondsRoulementPanel+comPanel+arretePanel+closePanel+archPanel;
   }
 
   /* ---------- MA CAISSE (arrêté de caisse : commercial & master) ---------- */
@@ -2493,20 +2510,16 @@
     // ---- Points & Rapports (Master) ----
     const rapDate=document.querySelector('[data-rap-date]');
     if(rapDate) rapDate.addEventListener('change', ()=>{ S.rapportsDate=rapDate.value||null; loadView('rapports').then(renderView); });
+    document.querySelectorAll('[data-rap-goto]').forEach(b=>b.addEventListener('click', ()=>{ if(b.disabled) return; S.rapportsDate=b.dataset.rapGoto; loadView('rapports').then(renderView); }));
+    const rapComSearch=document.querySelector('[data-rap-com-search]');
+    if(rapComSearch) rapComSearch.addEventListener('input', ()=>{ S.rapComSearch=rapComSearch.value; renderView(); const el=document.querySelector('[data-rap-com-search]'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
     const rapToday=document.querySelector('[data-rap-today]');
     if(rapToday) rapToday.addEventListener('click', ()=>{ S.rapportsDate=null; loadView('rapports').then(renderView); });
     const rapArrete=document.querySelector('[data-rap-print-arrete]');
     if(rapArrete) rapArrete.addEventListener('click', ()=>{ if(S.rapports&&S.rapports.report) printArreteMaster(S.rapports.report); });
-    document.querySelectorAll('[data-rap-fiche]').forEach(b=>b.addEventListener('click', ()=>{
-      const idx=Number(b.dataset.rapFiche);
-      const rep=(S.rapports&&S.rapports.report)||{}; const list=(rep.point&&rep.point.commerciaux)||[];
-      if(list[idx]) printFicheCommercial(list[idx], rep);
-    }));
+    const rapCom=document.querySelector('[data-rap-print-com]');
+    if(rapCom) rapCom.addEventListener('click', ()=>{ if(S.rapports&&S.rapports.report) printPointCommercial(S.rapports.report); });
     document.querySelectorAll('[data-rap-open]').forEach(b=>b.addEventListener('click', ()=>{ S.rapportsDate=b.dataset.rapOpen; loadView('rapports').then(renderView); }));
-    // Niveau 1 : recherche PDV + fiche imprimable d'un PDV (son relevé partagé)
-    const rapPdvSearch=document.querySelector('[data-rap-pdv-search]');
-    if(rapPdvSearch) rapPdvSearch.addEventListener('input', ()=>{ S.rapPdvSearch=rapPdvSearch.value; renderView(); const el=document.querySelector('[data-rap-pdv-search]'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
-    document.querySelectorAll('[data-rap-pdv-fiche]').forEach(b=>b.addEventListener('click', ()=>{ openPdvReleve(b.dataset.rapPdvFiche, b.dataset.pdvNom||'PDV'); }));
     const rapClose=document.querySelector('[data-rap-close]');
     if(rapClose) rapClose.addEventListener('click', async ()=>{
       const dt=(S.rapports&&S.rapports.date)||'';
