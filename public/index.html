@@ -1468,6 +1468,23 @@
     const url=role==='PDV'?'/pdv/demandes':(role==='MASTER'?'/master/demandes':'/commercial/demandes');
     try{ S.demandes=await api(url); }catch(e){}
   }
+  // Rafraîchissement temps réel de l'écran courant (anti-rebond ~300ms) — sans casser la saisie en cours
+  let _refreshTimer=null;
+  const REFRESH_VIEWS=['demandes','caisse','dashboard','releve','rapports','recharges','retours','recouvrement','historique','fonds','equipe'];
+  function scheduleRefresh(){
+    if(!S.auth) return;
+    clearTimeout(_refreshTimer);
+    _refreshTimer=setTimeout(function(){
+      const v=S.view;
+      if(!REFRESH_VIEWS.includes(v)) return;
+      // Ne pas interrompre une saisie active (input/textarea/select focalisé)
+      const ae=document.activeElement;
+      if(ae && (ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT')) return;
+      // Ne pas rafraîchir si une modale est ouverte (dialogue en cours)
+      const ov=$('overlay'); if(ov && ov.classList.contains('open')) return;
+      loadView(v).then(renderView).catch(function(){});
+    }, 300);
+  }
   /* ---------- HISTORIQUE (Master) : rechargements / retours / échanges, filtrables ---------- */
   function histoFilter(list){
     const d=S.histoDate, r=S.histoReseau;
@@ -2699,6 +2716,9 @@
     LIVE=new WebSocket(proto+'//'+location.host+'/ws?token='+encodeURIComponent(S.auth.token));
     LIVE.onmessage=(ev)=>{
       let d; try{ d=JSON.parse(ev.data); }catch(e){ return; }
+      // Rafraîchissement universel : quasiment tout événement met à jour l'écran courant en <1s
+      if(d.type!=='blocked' && d.type!=='ping' && d.type!=='pong'){ scheduleRefresh(); }
+      if(d.type==='demande_refresh'){ if(S.view==='demandes'){ reloadDemandes().then(renderView); } setDemandesBadge(true); return; }
       if(d.type==='blocked'){
         vibrate([120,60,120,60,220]);
         stopLocationTracking();
