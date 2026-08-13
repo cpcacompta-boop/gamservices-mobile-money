@@ -1120,11 +1120,12 @@
       return '<div class="panel"><div style="padding:26px;color:var(--ink-soft);font-size:12px;line-height:1.6;text-align:center">Tu n\'es rattaché à aucune zone.<br>Demande au superviseur de t\'affecter comme responsable (ou suppléant) d\'une zone.</div></div>';
     }
     const t=c.totals||{};
-    const header=`<div class="welcome"><h2>Ma caisse — ${esc(c.zone.nom)} 💼</h2><p>Ton point : ce que tu as encaissé, ce que tu as encore en main, et ce que tu as versé aux Masters.</p></div>
+    const header=`<div class="welcome"><h2>Ma caisse — ${esc(c.zone.nom)} 💼</h2><p>Ton point : ce que tu as encaissé, les retours que tu as payés, et ce qu'il te reste à reverser aux Masters.</p></div>
       <div class="stat-row">
         <div class="stat gold"><div class="lbl">Encaissé (total)</div><div class="num">${fmtFcfa(t.encaisse)}</div></div>
-        <div class="stat red"><div class="lbl">En main (à reverser)</div><div class="num">${fmtFcfa(t.en_main)}</div></div>
-        <div class="stat"><div class="lbl">En transit (à confirmer)</div><div class="num">${fmtFcfa(t.en_transit)}</div></div>
+        <div class="stat"><div class="lbl">Retours payés</div><div class="num">${fmtFcfa(t.retours||0)}</div></div>
+        <div class="stat red"><div class="lbl">À reverser (net)</div><div class="num">${fmtFcfa(t.a_reverser!=null?t.a_reverser:t.en_main)}</div></div>
+        <div class="stat"><div class="lbl">En transit</div><div class="num">${fmtFcfa(t.en_transit)}</div></div>
         <div class="stat"><div class="lbl">Versé (confirmé)</div><div class="num">${fmtFcfa(t.verse)}</div></div>
       </div>`;
     const enMain=c.en_main||[];
@@ -1157,7 +1158,25 @@
       return '<tr><td>'+esc(master)+'</td><td><b>'+fmtFcfa(v.montant)+'</b> FCFA</td><td>'+tag+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(v.confirmed_at||v.created_at)+'</td></tr>';
     }).join(''):'<tr class="empty-row"><td colspan="4">Aucun versement</td></tr>';
     const vPanel='<div class="panel"><div class="panel-head"><h3>Historique des versements</h3></div><div class="table-wrap"><table><thead><tr><th>Master</th><th>Montant</th><th>Statut</th><th>Date</th></tr></thead><tbody>'+vRows+'</tbody></table></div></div>';
-    return header+mainPanel+transPanel+jourPanel+vPanel;
+    // Payer un retour cash à un PDV (option A) : sort de la caisse commercial, l'UV revient au Master
+    const pdvOpts='<option value="">— point de vente —</option>'+((c.pdvs||[]).map(function(p){var nm=p.nom_commercial||p.username;return '<option value="'+p.id+'">'+esc(nm)+'</option>';}).join(''));
+    const rzOpts='<option value="">— réseau —</option>'+((c.reseaux||[]).map(function(r){return '<option value="'+r.id+'">'+esc(r.nom)+'</option>';}).join(''));
+    const payRetourPanel='<div class="panel"><div class="panel-head"><h3>Payer un retour à un PDV</h3><span class="hint">Le PDV rend de l\'UV, tu lui donnes le cash — ça baisse ce que tu dois reverser</span></div>'+
+      '<form data-form-retour-pdv><div class="form-grid">'+
+        '<div class="field span2"><label>Point de vente</label><select name="pdv_id" required>'+pdvOpts+'</select></div>'+
+        '<div class="field"><label>Réseau (où le PDV rend l\'UV)</label><select name="reseau_id" required>'+rzOpts+'</select></div>'+
+        '<div class="field"><label>Montant (FCFA que tu remets)</label><input name="montant" type="number" min="0.01" step="any" required placeholder="ex : 20000"></div>'+
+      '</div>'+
+      '<div style="padding:0 20px 6px;color:var(--ink-soft);font-size:11px">Bloqué si ta caisse en main est insuffisante. Le solde UV du réseau du Master monte automatiquement.</div>'+
+      '<div class="msg" data-msg></div>'+
+      '<div class="form-actions"><button class="btn" type="submit">Enregistrer le retour payé</button></div>'+
+      '</form></div>';
+    const rets=c.retours||[];
+    const retRows=rets.length?rets.map(function(ra){ var pdv=ra.nom_commercial||ra.pdv_username||'—'; var master=[ra.master_nom,ra.master_prenoms].filter(Boolean).join(' ')||ra.master_username||'—';
+      return '<tr><td>'+esc(pdv)+'</td><td><b>'+fmtFcfa(ra.montant)+'</b> FCFA</td><td>'+esc(ra.reseau_nom||'—')+'</td><td>'+esc(master)+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(ra.created_at)+'</td></tr>';
+    }).join(''):'<tr class="empty-row"><td colspan="5">Aucun retour payé</td></tr>';
+    const retPanel='<div class="panel"><div class="panel-head"><h3>Retours que tu as payés</h3></div><div class="table-wrap"><table><thead><tr><th>PDV</th><th>Montant</th><th>Réseau</th><th>Master</th><th>Date</th></tr></thead><tbody>'+retRows+'</tbody></table></div></div>';
+    return header+mainPanel+payRetourPanel+retPanel+transPanel+jourPanel+vPanel;
   }
 
   function renderCaisseMaster(){
@@ -2275,6 +2294,20 @@
         dlgSuccess('Encaissement enregistré','Le règlement a été enregistré et le fonds du Master a été crédité.');
       }catch(err){ b.disabled=false; b.textContent='Encaisser'; dlgError('Erreur', err.message); }
     }));
+    // ---- Ma caisse (Commercial) : payer un retour cash à un PDV ----
+    const retPdvForm=document.querySelector('form[data-form-retour-pdv]');
+    if(retPdvForm) retPdvForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const msg=retPdvForm.querySelector('[data-msg]'); const d=Object.fromEntries(new FormData(retPdvForm).entries());
+      if(!d.pdv_id||!d.reseau_id||!(Number(d.montant)>0)){ msg.textContent='✘ Remplis tous les champs'; msg.className='msg err'; return; }
+      const ok=await dlgConfirm('Payer ce retour ?','Tu remets '+fmtFcfa(d.montant)+' FCFA au PDV (il rend l\'UV). Ta caisse baisse d\'autant et tu auras '+fmtFcfa(d.montant)+' FCFA de moins à reverser.',{type:'warn',okText:'Oui, je paie'});
+      if(!ok) return; msg.textContent='Enregistrement…'; msg.className='msg'; const btn=retPdvForm.querySelector('button[type=submit]'); btn.disabled=true;
+      try{
+        await api('/commercial/retour-pdv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+        S.commCaisse=await api('/commercial/caisse'+(S.caisseDate?('?date='+encodeURIComponent(S.caisseDate)):'')); renderView();
+        dlgSuccess('Retour payé','La caisse a été mise à jour, l\'UV est revenu chez le Master.');
+      }catch(err){ msg.textContent='✘ '+err.message; msg.className='msg err'; btn.disabled=false; }
+    });
     // ---- Ma caisse (Commercial) : verser à un Master ----
     document.querySelectorAll('[data-verser]').forEach(b=>b.addEventListener('click', async ()=>{
       const ok=await dlgConfirm('Verser au Master ?','Tu confirmes remettre '+b.dataset.amount+' FCFA à '+b.dataset.master+' ?\n\nLe Master devra confirmer la réception.',{type:'success',okText:'Oui, je verse'});
