@@ -37,6 +37,21 @@ function broadcastToSupervisors(obj){ wsClients.forEach(ws=>{ if(ws.role === 'SU
 function broadcastToMasters(obj){ wsClients.forEach(ws=>{ if(ws.role === 'MASTER') wsSend(ws, obj); }); }
 function kickUser(userId){ wsClients.forEach(ws=>{ if(ws.userId === Number(userId)){ wsSend(ws, { type:'blocked' }); try{ ws.close(); }catch(e){} } }); }
 
+// Prévient TOUTES les parties d'une demande (PDV + Master + commerciaux de la zone) pour un rafraîchissement instantané
+async function notifyDemandeParties(d, obj){
+  if(!d) return;
+  const targets = new Set();
+  if(d.pdv_id) targets.add(Number(d.pdv_id));
+  if(d.master_id) targets.add(Number(d.master_id));
+  if(d.zone_id){
+    try{ const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1',[d.zone_id]);
+      if(z.rows.length) [z.rows[0].responsable_id, z.rows[0].suppleant_id].forEach(u=>{ if(u) targets.add(Number(u)); });
+    }catch(e){}
+  }
+  targets.forEach(uid=> sendToUser(uid, obj));
+  broadcastToSupervisors(obj);
+}
+
 // Vérifie les recharges UV encaissées en attente depuis un jour précédent (paiement "oublié")
 // -> alerte le Master + le superviseur, la recharge RESTE en attente (aucune fermeture automatique)
 async function checkOverdueRecharges() {
@@ -325,7 +340,7 @@ app.get('/version', wrap(async (req, res) => {
   let hasGam = false, hasRachats = false;
   try { await pool.query('SELECT 1 FROM gam_versements LIMIT 1'); hasGam = true; } catch (e) { hasGam = false; }
   try { await pool.query('SELECT 1 FROM gam_rachats_uv LIMIT 1'); hasRachats = true; } catch (e) { hasRachats = false; }
-  res.json({ version: 'gam-2026-08-tz-abidjan-v4', table_prete: hasGam, rachats_prets: hasRachats });
+  res.json({ version: 'gam-2026-08-realtime-v5', table_prete: hasGam, rachats_prets: hasRachats });
 }));
 
 // Connexion (public) — verrouillage anti-force brute PERSISTANT (en base)
@@ -815,6 +830,7 @@ app.post('/pdv/demandes', requireRole('PDV'), wrap(async (req, res) => {
     const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1', [zoneId]);
     if (z.rows.length) [z.rows[0].responsable_id, z.rows[0].suppleant_id].forEach(uid => { if (uid) sendToUser(uid, payload); });
   }
+  await notifyDemandeParties(d.rows[0], { type: 'demande_refresh' });
   res.json({ ok: true, demande: d.rows[0] });
 }));
 
@@ -831,6 +847,7 @@ app.get('/pdv/demandes', requireRole('PDV'), wrap(async (req, res) => {
 app.post('/pdv/demandes/:id/cancel', requireRole('PDV'), wrap(async (req, res) => {
   const upd = await pool.query("UPDATE gam_demandes SET statut='ANNULE', updated_at=now() WHERE id=$1 AND pdv_id=$2 AND statut='EN_ATTENTE' RETURNING *", [req.params.id, req.user.id]);
   if (!upd.rows.length) return res.status(409).json({ error: 'Impossible d\'annuler : déjà prise en charge ou traitée.' });
+  await notifyDemandeParties(upd.rows[0], { type: 'demande_refresh' });
   res.json({ ok: true });
 }));
 
@@ -876,6 +893,7 @@ app.post('/demandes/:id/take', requireRole('MASTER', 'COMMERCIAL'), wrap(async (
   if (!upd.rows.length) return res.status(409).json({ error: 'Cette demande a déjà été prise en charge (ou traitée).' });
   const d = upd.rows[0];
   sendToUser(d.pdv_id, { type: 'demande_update', statut: 'PRIS', par: nom });
+  await notifyDemandeParties(d, { type: 'demande_refresh' });
   if (d.master_id && d.master_id !== req.user.id) sendToUser(d.master_id, { type: 'demande_taken', par: nom });
   if (d.zone_id) {
     const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1', [d.zone_id]);
@@ -893,6 +911,7 @@ app.post('/demandes/:id/serve', requireRole('MASTER', 'COMMERCIAL'), wrap(async 
   const upd = await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1 AND statut IN ('EN_ATTENTE','PRIS') RETURNING *", [req.params.id]);
   if (!upd.rows.length) return res.status(409).json({ error: 'Demande déjà traitée.' });
   sendToUser(upd.rows[0].pdv_id, { type: 'demande_update', statut: 'SERVI' });
+  await notifyDemandeParties(upd.rows[0], { type: 'demande_refresh' });
   res.json({ ok: true });
 }));
 
@@ -910,6 +929,7 @@ app.post('/demandes/:id/servir-uv', requireRole('MASTER'), wrap(async (req, res)
     const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1', [d.zone_id]);
     if (z.rows.length) [z.rows[0].responsable_id, z.rows[0].suppleant_id].forEach(uid => { if (uid) sendToUser(uid, { type: 'demande_new', demande_type: 'ENCAISSEMENT', montant: d.montant }); });
   }
+  await notifyDemandeParties(d, { type: 'demande_refresh' });
   res.json({ ok: true });
 }));
 
@@ -921,6 +941,7 @@ app.post('/demandes/:id/encaisser', requireRole('MASTER', 'COMMERCIAL'), wrap(as
     [req.user.id, req.user.role, req.params.id]);
   if (!upd.rows.length) return res.status(409).json({ error: "L'UV doit d'abord être servi par le Master." });
   sendToUser(upd.rows[0].pdv_id, { type: 'demande_update', statut: 'SERVI', par: nom });
+  await notifyDemandeParties(upd.rows[0], { type: 'demande_refresh' });
   res.json({ ok: true });
 }));
 
@@ -938,6 +959,7 @@ app.post('/demandes/:id/echange-recu', requireRole('MASTER'), wrap(async (req, r
   await pool.query('UPDATE users SET solde_uv=solde_uv+$1 WHERE id=$2', [montant, req.user.id]);
   await pool.query("UPDATE gam_demandes SET statut='UV_RECU', master_id=$1, pris_par=$1, pris_par_role='MASTER', updated_at=now() WHERE id=$2", [req.user.id, d.id]);
   sendToUser(d.pdv_id, { type: 'demande_update', statut: 'UV_RECU' });
+  await notifyDemandeParties(d, { type: 'demande_refresh' });
   res.json({ ok: true });
 }));
 
@@ -960,6 +982,7 @@ app.post('/demandes/:id/echange-servir', requireRole('MASTER'), wrap(async (req,
   await pool.query('UPDATE users SET solde_uv=solde_uv-$1 WHERE id=$2', [montant, req.user.id]);
   await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1", [d.id]);
   sendToUser(d.pdv_id, { type: 'demande_update', statut: 'SERVI' });
+  await notifyDemandeParties(d, { type: 'demande_refresh' });
   res.json({ ok: true });
 }));
 
@@ -1045,6 +1068,7 @@ app.post('/commercial/recharges/:id/collect', requireRole('COMMERCIAL'), wrap(as
   await pool.query("UPDATE uv_recharges SET statut='PAYE', mode_paiement='FCFA', regle_par=$1, regle_par_role='COMMERCIAL', remis=FALSE, paid_at=now() WHERE id=$2", [req.user.id, rc.id]);
   const commercialNom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
   sendToUser(rc.master_id, { type: 'collected_pending_remit', montant, commercial: commercialNom });
+  sendToUser(rc.pdv_id, { type: 'data_refresh' }); broadcastToSupervisors({ type: 'data_refresh' });
   res.json({ ok: true });
 }));
 
@@ -1145,6 +1169,7 @@ app.post('/commercial/retour-pdv', requireRole('COMMERCIAL'), wrap(async (req, r
   await pool.query('UPDATE users SET solde_uv=solde_uv+$1 WHERE id=$2', [montant, masterId]);
   const commercialNom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
   sendToUser(masterId, { type: 'retour_commercial', montant, commercial: commercialNom });
+  sendToUser(pdvId, { type: 'data_refresh' }); broadcastToSupervisors({ type: 'data_refresh' });
   res.json({ ok: true });
 }));
 
