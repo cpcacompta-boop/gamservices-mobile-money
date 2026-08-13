@@ -1045,12 +1045,21 @@
       '</tbody></table></div></div>';
     // Niveau 2 — Commercial
     const coms=(rep.point&&rep.point.commerciaux)||[];
-    const comPanel='<div class="panel"><div class="panel-head"><h3>Niveau 2 — Point Commercial ↔ Master</h3><span class="hint">Fiche par commercial, à imprimer et faire signer</span></div>'+
-      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Encaissé</th><th>Reversé</th><th>Reste</th><th>Fiche</th></tr></thead><tbody>'+
-      (coms.length?coms.map(function(cm,i){ const reste=cm.total-cm.total_remis;
-        return '<tr><td>'+esc(cm.commercial_nom)+(cm.zone_nom?' <span style="color:var(--ink-soft);font-size:11px">('+esc(cm.zone_nom)+')</span>':'')+'</td><td><b>'+fmtFcfa(cm.total)+'</b> FCFA</td><td>'+fmtFcfa(cm.total_remis)+' FCFA</td><td>'+fmtFcfa(reste)+' FCFA</td><td><button class="btn small" data-rap-fiche="'+i+'" type="button">🖨️ Imprimer</button></td></tr>';
+    const comPanel='<div class="panel"><div class="panel-head"><h3>Niveau 2 — Point Commercial ↔ Master</h3><span class="hint">Ce que chaque commercial a encaissé des PDV, ses retours, et son net à reverser</span></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Encaissé (PDV)</th><th>Retours payés</th><th>Net à reverser</th><th>Fiche</th></tr></thead><tbody>'+
+      (coms.length?coms.map(function(cm,i){ const net=cm.net!=null?cm.net:(cm.total-(cm.retours||0));
+        return '<tr><td>'+esc(cm.commercial_nom)+(cm.zone_nom?' <span style="color:var(--ink-soft);font-size:11px">('+esc(cm.zone_nom)+')</span>':'')+'</td><td><b>'+fmtFcfa(cm.total)+'</b> FCFA</td><td>'+fmtFcfa(cm.retours||0)+' FCFA</td><td><b>'+fmtFcfa(net)+'</b> FCFA</td><td><button class="btn small" data-rap-fiche="'+i+'" type="button">🖨️ Imprimer</button></td></tr>';
       }).join(''):'<tr class="empty-row"><td colspan="5">Aucun commercial actif ce jour</td></tr>')+
       '</tbody></table></div></div>';
+    // Fonds de roulement : UV par réseau + FCFA
+    const reseaux=rep.reseaux||[];
+    const totalUv=reseaux.reduce(function(s,r){return s+Number(r.solde_uv||0);},0);
+    const fondsRoulementPanel='<div class="panel"><div class="panel-head"><h3>Fonds de roulement</h3><span class="hint">UV par réseau + FCFA disponibles</span></div>'+
+      '<div class="stat-row" style="padding:14px 16px">'+
+        reseaux.map(function(r){return '<div class="stat'+(r.solde_uv>0?' gold':'')+'"><div class="lbl">'+esc(r.nom)+'</div><div class="num">'+fmtUv(r.solde_uv)+'</div></div>';}).join('')+
+        '<div class="stat"><div class="lbl">FCFA disponible</div><div class="num">'+fmtFcfa((rep.fund&&rep.fund.solde_fcfa)||0)+'</div></div>'+
+      '</div>'+
+      '<div style="padding:4px 20px 14px;color:var(--ink-soft);font-size:11px">Total UV (somme des réseaux) : <b>'+fmtUv(totalUv)+'</b> UV</div></div>';
     // Niveau 3 — Arrêté global
     const f=rep.fund||{};
     const C=Number(f.total_credite||0),R2=Number(f.total_retourne||0),net=C-R2,caisse=Number(f.fonds_total||0);
@@ -1092,7 +1101,7 @@
         return '<tr><td>'+esc(a.date)+'</td><td>'+fmtFcfa(a.net)+' FCFA</td><td>'+(Number(a.manquant)>0?'<b style="color:var(--red)">'+fmtFcfa(a.manquant)+'</b>':fmtFcfa(a.manquant))+' FCFA</td><td><button class="btn small" data-rap-open="'+esc(a.date)+'" type="button">Ouvrir</button></td></tr>';
       }).join(''):'<tr class="empty-row"><td colspan="4">Aucune clôture pour le moment</td></tr>')+
       '</tbody></table></div></div>';
-    return header+statusBar+pdvPanel+comPanel+arretePanel+closePanel+archPanel;
+    return header+statusBar+fondsRoulementPanel+pdvPanel+comPanel+arretePanel+closePanel+archPanel;
   }
 
   /* ---------- MA CAISSE (arrêté de caisse : commercial & master) ---------- */
