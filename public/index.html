@@ -1458,6 +1458,7 @@
     if(d.statut==='EN_ATTENTE') return '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">En attente</span>';
     if(d.statut==='PRIS') return '<span class="pill" style="background:#E4ECFB;color:var(--brand)">Pris en charge</span>';
     if(d.statut==='UV_RECU') return '<span class="pill" style="background:#E4ECFB;color:var(--brand)">UV reçu — à servir</span>';
+    if(d.statut==='SERVI_UV') return '<span class="pill" style="background:rgba(200,155,60,.16);color:var(--gold)">UV servi ✔ — à encaisser</span>';
     if(d.statut==='SERVI') return '<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Servi ✔</span>';
     if(d.statut==='ANNULE') return '<span class="pill" style="background:var(--red-soft);color:var(--red)">Annulé</span>';
     return esc(d.statut);
@@ -1572,11 +1573,19 @@
         else if(d.statut==='EN_ATTENTE'){ action='<button class="btn small" data-echange-recu="'+d.id+'" data-amount="'+esc(fmtUv(d.montant))+'" data-r1="'+esc(d.reseau_nom||'')+'" type="button">1) Confirmer réception UV</button>'; }
         else if(d.statut==='UV_RECU'){ action='<button class="btn small" data-echange-servir="'+d.id+'" data-amount="'+esc(fmtUv(d.montant))+'" data-r2="'+esc(d.reseau2_nom||'')+'" type="button">2) Envoyer l\'UV '+esc(d.reseau2_nom||'')+'</button>'; }
         else { action='—'; }
+      } else if(d.type==='RECHARGEMENT'){
+        // Workflow 2 acteurs : le Master sert l'UV d'abord, puis le Commercial encaisse le cash.
+        if(d.statut==='SERVI_UV'){
+          // UV déjà servi -> il reste à encaisser le cash (Master ou Commercial)
+          action='<button class="btn small" data-dem-encaisser="'+d.id+'" type="button">💵 J\'ai encaissé le cash</button>';
+        } else if(isMaster){
+          action='<button class="btn small" data-dem-servir-uv="'+d.id+'" type="button">Servir l\'UV</button>';
+        } else {
+          action='<span style="font-size:11px;color:var(--ink-soft)">Le Master sert l\'UV d\'abord</span>';
+        }
       } else {
-        // Rechargement / Retour : le commercial ne sert pas d'UV
-        const peutPrendre = isMaster || (d.type==='RETOUR');
-        if(!peutPrendre){ action='<span style="font-size:11px;color:var(--ink-soft)">À servir par le Master</span>'; }
-        else if(d.statut==='EN_ATTENTE'){ action='<button class="btn small" data-dem-take="'+d.id+'" type="button">Je m\'en occupe</button>'; }
+        // RETOUR : les deux peuvent "prendre en charge" ; SEUL le Master peut "Marquer servi".
+        if(d.statut==='EN_ATTENTE'){ action='<button class="btn small" data-dem-take="'+d.id+'" type="button">Je m\'en occupe</button>'; }
         else { action=isMaster ? '<button class="btn small" data-dem-serve="'+d.id+'" type="button">Marquer servi</button>' : '<span style="font-size:11px;color:var(--ink-soft)">En cours — clôture par le Master</span>'; }
       }
       return '<tr><td><b>'+esc(pdv)+'</b></td><td>'+demTypePill(d.type)+'</td><td>'+res+'</td><td>'+(Number(d.montant)>0?fmtUv(d.montant)+' UV':'—')+'</td><td>'+demStatutPill(d)+(pris?' <span style="font-size:11px;color:var(--ink-soft)">'+esc(pris)+'</span>':'')+'</td><td style="font-size:11px;color:var(--ink-soft)">'+timeAgo(d.created_at)+'</td><td style="white-space:nowrap">'+action+'</td></tr>';
@@ -2342,6 +2351,18 @@
       try{ await api('/demandes/'+b.dataset.demServe+'/serve',{method:'POST'}); await reloadDemandes(); renderView(); }
       catch(err){ await reloadDemandes(); renderView(); dlgError('Erreur', err.message); }
     }));
+    document.querySelectorAll('[data-dem-servir-uv]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Servir l\'UV au PDV ?','Confirme que tu as envoyé l\'UV. Le PDV sera informé de préparer le cash, et le commercial pourra passer encaisser.',{type:'success',okText:'Oui, UV servi'}); if(!ok) return;
+      b.disabled=true; b.textContent='…';
+      try{ await api('/demandes/'+b.dataset.demServirUv+'/servir-uv',{method:'POST'}); await reloadDemandes(); renderView(); dlgSuccess('UV servi ✔','Le PDV est informé. Le commercial peut passer encaisser le cash.'); }
+      catch(err){ await reloadDemandes(); renderView(); dlgError('Erreur', err.message); }
+    }));
+    document.querySelectorAll('[data-dem-encaisser]').forEach(b=>b.addEventListener('click', async ()=>{
+      const ok=await dlgConfirm('Confirmer l\'encaissement ?','Tu confirmes avoir récupéré le cash chez le PDV pour cette recharge.',{type:'success',okText:'Oui, encaissé'}); if(!ok) return;
+      b.disabled=true; b.textContent='…';
+      try{ await api('/demandes/'+b.dataset.demEncaisser+'/encaisser',{method:'POST'}); await reloadDemandes(); renderView(); dlgSuccess('Encaissé ✔','La demande est clôturée.'); }
+      catch(err){ await reloadDemandes(); renderView(); dlgError('Erreur', err.message); }
+    }));
     // ---- Historique (Master) : onglets + filtres ----
     document.querySelectorAll('[data-histo-tab]').forEach(b=>b.addEventListener('click', ()=>{ S.histoTab=b.dataset.histoTab; S.histoReseau=null; renderView(); }));
     const hDate=document.querySelector('[data-histo-date]');
@@ -2731,7 +2752,11 @@
         beep(); vibrate([120,60,120]);
         setDemandesBadge(true);
         if(S.view==='demandes'){ reloadDemandes().then(renderView); }
-        else { dlgSuccess('Nouvelle demande '+(d.demande_type==='RETOUR'?'de retour':'de rechargement'), (d.pdv||'Un PDV')+' demande'+(Number(d.montant)>0?' '+fmtUv(d.montant)+' UV':'')+'. Va dans « Demandes ».'); }
+        else {
+          const lbl = d.demande_type==='RETOUR' ? 'de retour' : (d.demande_type==='ENCAISSEMENT' ? '— cash à encaisser' : 'de rechargement');
+          if(d.demande_type==='ENCAISSEMENT') dlgSuccess('Cash à encaisser 💵', 'Un PDV a reçu son UV'+(Number(d.montant)>0?' ('+fmtUv(d.montant)+' UV)':'')+'. Passe encaisser le cash. Va dans « Demandes ».');
+          else dlgSuccess('Nouvelle demande '+lbl, (d.pdv||'Un PDV')+' demande'+(Number(d.montant)>0?' '+fmtUv(d.montant)+' UV':'')+'. Va dans « Demandes ».');
+        }
       } else if(d.type==='demande_taken'){
         // Agent : la demande a été prise par l'autre -> on rafraîchit
         if(S.view==='demandes'){ reloadDemandes().then(renderView); }
@@ -2739,6 +2764,8 @@
         // PDV : statut de sa demande a changé
         vibrate([60,40,60]);
         if(d.statut==='PRIS') dlgSuccess('Demande prise en charge', (d.par||'Quelqu\'un')+' s\'occupe de ta demande.');
+        else if(d.statut==='SERVI_UV') dlgSuccess('Ton UV est servi ✔', 'Le Master t\'a envoyé l\'UV. Prépare le cash : le commercial passe l\'encaisser.');
+        else if(d.statut==='UV_RECU') dlgSuccess('UV bien reçu ✔', 'Le Master a confirmé la réception de ton UV. Il t\'envoie l\'UV demandé.');
         else if(d.statut==='SERVI') dlgSuccess('Demande servie', 'Ta demande a été traitée. ✔');
         if(S.view==='demandes'){ reloadDemandes().then(renderView); }
       } else if(d.type==='recharge_alert'){
