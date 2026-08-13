@@ -325,7 +325,7 @@ app.get('/version', wrap(async (req, res) => {
   let hasGam = false, hasRachats = false;
   try { await pool.query('SELECT 1 FROM gam_versements LIMIT 1'); hasGam = true; } catch (e) { hasGam = false; }
   try { await pool.query('SELECT 1 FROM gam_rachats_uv LIMIT 1'); hasRachats = true; } catch (e) { hasRachats = false; }
-  res.json({ version: 'gam-2026-08-retours-reseaux-v3', table_prete: hasGam, rachats_prets: hasRachats });
+  res.json({ version: 'gam-2026-08-tz-abidjan-v4', table_prete: hasGam, rachats_prets: hasRachats });
 }));
 
 // Connexion (public) — verrouillage anti-force brute PERSISTANT (en base)
@@ -844,7 +844,7 @@ app.get('/master/demandes', requireRole('MASTER'), wrap(async (req, res) => {
      LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id
      LEFT JOIN gam_reseaux rs2 ON rs2.id=d.reseau2_id
      LEFT JOIN users g ON g.id=d.pris_par
-     WHERE (d.master_id=$1 OR d.master_id IS NULL) AND d.statut IN ('EN_ATTENTE','PRIS','UV_RECU')
+     WHERE (d.master_id=$1 OR d.master_id IS NULL) AND d.statut IN ('EN_ATTENTE','PRIS','UV_RECU','SERVI_UV')
      ORDER BY d.created_at DESC`, [req.user.id]);
   res.json(r.rows);
 }));
@@ -860,21 +860,16 @@ app.get('/commercial/demandes', requireRole('COMMERCIAL'), wrap(async (req, res)
      LEFT JOIN users p ON p.id=d.pdv_id
      LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id
      LEFT JOIN users g ON g.id=d.pris_par
-     WHERE d.zone_id=$1 AND d.type <> 'ECHANGE' AND d.statut IN ('EN_ATTENTE','PRIS')
+     WHERE d.zone_id=$1 AND d.type <> 'ECHANGE' AND d.statut IN ('EN_ATTENTE','PRIS','SERVI_UV')
      ORDER BY d.created_at DESC`, [zone.id]);
   res.json(r.rows);
 }));
 
 // Master ou Commercial : « Je m'en occupe » (anti-doublon garanti par le WHERE statut='EN_ATTENTE')
+// Le commercial peut prendre en charge rechargement ET retour (il passe encaisser le cash).
+// Seul le Master pourra ensuite « Marquer servi » (il sert l'UV).
 app.post('/demandes/:id/take', requireRole('MASTER', 'COMMERCIAL'), wrap(async (req, res) => {
   const nom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
-  // Sécurité argent : le commercial ne peut pas servir de l'UV -> interdit sur les demandes de RECHARGEMENT
-  if (req.user.role === 'COMMERCIAL') {
-    const chk = await pool.query('SELECT type FROM gam_demandes WHERE id=$1', [req.params.id]);
-    if (chk.rows.length && chk.rows[0].type === 'RECHARGEMENT') {
-      return res.status(403).json({ error: "Une demande de rechargement (UV) est servie par le Master. Tu passeras encaisser le cash." });
-    }
-  }
   const upd = await pool.query(
     "UPDATE gam_demandes SET statut='PRIS', pris_par=$1, pris_par_role=$2, updated_at=now() WHERE id=$3 AND statut='EN_ATTENTE' RETURNING *",
     [req.user.id, req.user.role, req.params.id]);
@@ -898,6 +893,34 @@ app.post('/demandes/:id/serve', requireRole('MASTER', 'COMMERCIAL'), wrap(async 
   const upd = await pool.query("UPDATE gam_demandes SET statut='SERVI', updated_at=now() WHERE id=$1 AND statut IN ('EN_ATTENTE','PRIS') RETURNING *", [req.params.id]);
   if (!upd.rows.length) return res.status(409).json({ error: 'Demande déjà traitée.' });
   sendToUser(upd.rows[0].pdv_id, { type: 'demande_update', statut: 'SERVI' });
+  res.json({ ok: true });
+}));
+
+/* ---- RECHARGEMENT : workflow 2 acteurs (Master sert l'UV -> Commercial encaisse le cash) ---- */
+// Le Master sert l'UV au PDV -> le PDV est notifié (« prépare le cash ») et le commercial voit « à encaisser »
+app.post('/demandes/:id/servir-uv', requireRole('MASTER'), wrap(async (req, res) => {
+  const upd = await pool.query(
+    "UPDATE gam_demandes SET statut='SERVI_UV', master_id=$1, updated_at=now() WHERE id=$2 AND type='RECHARGEMENT' AND statut IN ('EN_ATTENTE','PRIS') RETURNING *",
+    [req.user.id, req.params.id]);
+  if (!upd.rows.length) return res.status(409).json({ error: 'Demande déjà traitée ou introuvable.' });
+  const d = upd.rows[0];
+  sendToUser(d.pdv_id, { type: 'demande_update', statut: 'SERVI_UV' });
+  // Prévenir les commerciaux de la zone qu'il y a du cash à encaisser
+  if (d.zone_id) {
+    const z = await pool.query('SELECT responsable_id, suppleant_id FROM zones WHERE id=$1', [d.zone_id]);
+    if (z.rows.length) [z.rows[0].responsable_id, z.rows[0].suppleant_id].forEach(uid => { if (uid) sendToUser(uid, { type: 'demande_new', demande_type: 'ENCAISSEMENT', montant: d.montant }); });
+  }
+  res.json({ ok: true });
+}));
+
+// Le Commercial (ou le Master) confirme avoir encaissé le cash -> demande clôturée
+app.post('/demandes/:id/encaisser', requireRole('MASTER', 'COMMERCIAL'), wrap(async (req, res) => {
+  const nom = [req.user.nom, req.user.prenoms].filter(Boolean).join(' ') || req.user.username;
+  const upd = await pool.query(
+    "UPDATE gam_demandes SET statut='SERVI', pris_par=$1, pris_par_role=$2, updated_at=now() WHERE id=$3 AND type='RECHARGEMENT' AND statut='SERVI_UV' RETURNING *",
+    [req.user.id, req.user.role, req.params.id]);
+  if (!upd.rows.length) return res.status(409).json({ error: "L'UV doit d'abord être servi par le Master." });
+  sendToUser(upd.rows[0].pdv_id, { type: 'demande_update', statut: 'SERVI', par: nom });
   res.json({ ok: true });
 }));
 
@@ -1178,9 +1201,9 @@ app.get('/commercial/caisse', requireRole('COMMERCIAL'), wrap(async (req, res) =
   const totEnTransit = enTransit.reduce((s, r) => s + Number(r.montant), 0);
 
   const encaisseJour = pdvIds.length ? Number((await pool.query(
-    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE pdv_id=ANY($1) AND regle_par=$2 AND regle_par_role='COMMERCIAL' AND statut='PAYE' AND paid_at::date=$3::date", [pdvIds, cid, dateStr])).rows[0].s) : 0;
+    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE pdv_id=ANY($1) AND regle_par=$2 AND regle_par_role='COMMERCIAL' AND statut='PAYE' AND (paid_at AT TIME ZONE 'Africa/Abidjan')::date=$3::date", [pdvIds, cid, dateStr])).rows[0].s) : 0;
   const verseJour = Number((await pool.query(
-    "SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE commercial_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [cid, dateStr])).rows[0].s);
+    "SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE commercial_id=$1 AND statut='CONFIRME' AND (confirmed_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date", [cid, dateStr])).rows[0].s);
 
   const pdvsList = pdvIds.length ? (await pool.query("SELECT id, nom_commercial, username FROM users WHERE id=ANY($1) ORDER BY nom_commercial NULLS LAST", [pdvIds])).rows : [];
   const reseauxList = (await pool.query("SELECT id, nom FROM gam_reseaux WHERE actif=TRUE ORDER BY nom")).rows;
@@ -1230,11 +1253,11 @@ app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
      FROM gam_versements v JOIN users c ON c.id=v.commercial_id
      WHERE v.master_id=$1 AND v.statut='EN_ATTENTE' ORDER BY v.created_at`, [mid])).rows;
   const fcfaDirect = Number((await pool.query(
-    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND regle_par_role='MASTER' AND (mode_paiement IS NULL OR mode_paiement='FCFA') AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
+    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND regle_par_role='MASTER' AND (mode_paiement IS NULL OR mode_paiement='FCFA') AND (paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date", [mid, dateStr])).rows[0].s);
   const uvJour = Number((await pool.query(
-    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND mode_paiement='UV' AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
+    "SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND mode_paiement='UV' AND (paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date", [mid, dateStr])).rows[0].s);
   const fcfaVerse = Number((await pool.query(
-    "SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
+    "SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='CONFIRME' AND (confirmed_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date", [mid, dateStr])).rows[0].s);
   const u = (await pool.query('SELECT solde_uv, solde_fcfa FROM users WHERE id=$1', [mid])).rows[0] || { solde_uv: 0, solde_fcfa: 0 };
   const fund = await getMasterFund(mid);
 
@@ -1246,7 +1269,7 @@ app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
      JOIN users p ON p.id=rc.pdv_id
      LEFT JOIN users cu ON cu.id=rc.regle_par
      LEFT JOIN zones z ON z.id=p.zone_id
-     WHERE rc.master_id=$1 AND rc.statut='PAYE' AND rc.regle_par_role='COMMERCIAL' AND rc.paid_at::date=$2::date
+     WHERE rc.master_id=$1 AND rc.statut='PAYE' AND rc.regle_par_role='COMMERCIAL' AND (rc.paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date
      ORDER BY cu.nom NULLS LAST, p.nom_commercial NULLS LAST`, [mid, dateStr])).rows;
   const byCom = {};
   for (const r of collected) {
@@ -1281,19 +1304,19 @@ app.get('/master/caisse', requireRole('MASTER'), wrap(async (req, res) => {
 // Construit le rapport complet d'un Master pour un jour donné (niveaux PDV, Commercial, Master)
 async function computeMasterReport(mid, masterUser, dateStr) {
   const fund = await getMasterFund(mid);
-  const fcfaDirect = Number((await pool.query("SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND regle_par_role='MASTER' AND (mode_paiement IS NULL OR mode_paiement='FCFA') AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
-  const uvJour = Number((await pool.query("SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND mode_paiement='UV' AND paid_at::date=$2::date", [mid, dateStr])).rows[0].s);
-  const fcfaVerse = Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='CONFIRME' AND confirmed_at::date=$2::date", [mid, dateStr])).rows[0].s);
+  const fcfaDirect = Number((await pool.query("SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND regle_par_role='MASTER' AND (mode_paiement IS NULL OR mode_paiement='FCFA') AND (paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date", [mid, dateStr])).rows[0].s);
+  const uvJour = Number((await pool.query("SELECT COALESCE(SUM(montant_fcfa),0) s FROM uv_recharges WHERE master_id=$1 AND statut='PAYE' AND mode_paiement='UV' AND (paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date", [mid, dateStr])).rows[0].s);
+  const fcfaVerse = Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='CONFIRME' AND (confirmed_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date", [mid, dateStr])).rows[0].s);
 
   // Niveau 1 : point de chaque PDV (encaissé du jour + reste en attente)
   const pdvs = (await pool.query(
     `SELECT p.id AS pdv_id, p.nom_commercial, p.username AS pdv_username,
-       COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND rc.paid_at::date=$2::date),0) AS encaisse_jour,
+       COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND (rc.paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date),0) AS encaisse_jour,
        COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'),0) AS reste
      FROM uv_recharges rc JOIN users p ON p.id=rc.pdv_id
      WHERE rc.master_id=$1
      GROUP BY p.id, p.nom_commercial, p.username
-     HAVING COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND rc.paid_at::date=$2::date),0) > 0
+     HAVING COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND (rc.paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date),0) > 0
          OR COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'),0) > 0
      ORDER BY p.nom_commercial NULLS LAST`, [mid, dateStr])).rows
     .map(r => ({ pdv_id: r.pdv_id, pdv: r.nom_commercial || r.pdv_username, encaisse_jour: Number(r.encaisse_jour), reste: Number(r.reste) }));
@@ -1304,7 +1327,7 @@ async function computeMasterReport(mid, masterUser, dateStr) {
             z.nom AS zone_nom, p.nom_commercial, p.username AS pdv_username, rc.montant_fcfa, rc.remis
      FROM uv_recharges rc JOIN users p ON p.id=rc.pdv_id
      LEFT JOIN users cu ON cu.id=rc.regle_par LEFT JOIN zones z ON z.id=p.zone_id
-     WHERE rc.master_id=$1 AND rc.statut='PAYE' AND rc.regle_par_role='COMMERCIAL' AND rc.paid_at::date=$2::date
+     WHERE rc.master_id=$1 AND rc.statut='PAYE' AND rc.regle_par_role='COMMERCIAL' AND (rc.paid_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date
      ORDER BY cu.nom NULLS LAST, p.nom_commercial NULLS LAST`, [mid, dateStr])).rows;
   const byCom = {};
   for (const r of collected) {
@@ -1315,7 +1338,7 @@ async function computeMasterReport(mid, masterUser, dateStr) {
     byCom[k].total += m; if (r.remis) byCom[k].total_remis += m;
   }
   // Retours payés par chaque commercial ce jour (viennent en déduction de ce qu'il doit reverser)
-  (await pool.query("SELECT commercial_id, COALESCE(SUM(montant),0) s FROM gam_retours_commercial WHERE master_id=$1 AND created_at::date=$2::date GROUP BY commercial_id", [mid, dateStr])).rows
+  (await pool.query("SELECT commercial_id, COALESCE(SUM(montant),0) s FROM gam_retours_commercial WHERE master_id=$1 AND (created_at AT TIME ZONE 'Africa/Abidjan')::date=$2::date GROUP BY commercial_id", [mid, dateStr])).rows
     .forEach(r => { const k = r.commercial_id || 0; if (!byCom[k]) byCom[k] = { commercial_id: r.commercial_id, commercial_nom: '—', zone_nom: '', pdvs: [], total: 0, total_remis: 0, retours: 0 }; byCom[k].retours = Number(r.s); });
   const commerciaux = Object.values(byCom).map(c => { c.net = Math.max(0, c.total - c.retours); return c; });
 
