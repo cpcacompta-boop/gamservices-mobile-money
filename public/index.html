@@ -1037,11 +1037,18 @@
       '</div></div>';
     // Niveau 1 — PDV
     const pdvs=(rep.point&&rep.point.pdvs)||[];
-    const pdvPanel='<div class="panel"><div class="panel-head"><h3>Niveau 1 — Point des PDV</h3><span class="hint">Encaissé du jour et reste, par point de vente</span></div>'+
-      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>Encaissé (jour)</th><th>Reste</th><th>État</th></tr></thead><tbody>'+
-      (pdvs.length?pdvs.map(function(p){ const fait=Number(p.reste||0)===0;
-        return '<tr><td>'+esc(p.pdv)+'</td><td><b>'+fmtFcfa(p.encaisse_jour)+'</b> FCFA</td><td>'+fmtFcfa(p.reste)+' FCFA</td><td>'+(fait?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Fait ✔</span>':'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">À finir</span>')+'</td></tr>';
-      }).join(''):'<tr class="empty-row"><td colspan="4">Aucune activité PDV ce jour</td></tr>')+
+    const rapSearch=(S.rapPdvSearch||'').toLowerCase();
+    const pdvsF=rapSearch?pdvs.filter(function(p){return String(p.pdv||'').toLowerCase().includes(rapSearch);}):pdvs;
+    const totEnc=pdvsF.reduce(function(s,p){return s+Number(p.encaisse_jour||0);},0);
+    const totReste=pdvsF.reduce(function(s,p){return s+Number(p.reste||0);},0);
+    const pdvPanel='<div class="panel"><div class="panel-head"><h3>Niveau 1 — Point des PDV</h3><span class="hint">Point de chaque PDV : encaissé, reste — imprimable et filtrable</span></div>'+
+      '<div style="padding:10px 20px"><input type="text" data-rap-pdv-search placeholder="🔎 Rechercher un point de vente…" value="'+esc(S.rapPdvSearch||'')+'" style="max-width:280px"></div>'+
+      '<div class="table-wrap"><table><thead><tr><th>Point de vente</th><th>Encaissé (jour)</th><th>Reste</th><th>État</th><th>Fiche</th></tr></thead><tbody>'+
+      (pdvsF.length?pdvsF.map(function(p){ const fait=Number(p.reste||0)===0;
+        const btn=p.pdv_id?'<button class="btn small" data-rap-pdv-fiche="'+p.pdv_id+'" data-pdv-nom="'+esc(p.pdv)+'" type="button">🖨️ Fiche</button>':'—';
+        return '<tr><td>'+esc(p.pdv)+'</td><td><b>'+fmtFcfa(p.encaisse_jour)+'</b> FCFA</td><td>'+fmtFcfa(p.reste)+' FCFA</td><td>'+(fait?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Fait ✔</span>':'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">À finir</span>')+'</td><td>'+btn+'</td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="5">Aucun PDV'+(rapSearch?' pour cette recherche':' ce jour')+'</td></tr>')+
+      '<tr style="border-top:2px solid var(--line);font-weight:700"><td>TOTAL ('+pdvsF.length+')</td><td>'+fmtFcfa(totEnc)+' FCFA</td><td>'+fmtFcfa(totReste)+' FCFA</td><td colspan="2"></td></tr>'+
       '</tbody></table></div></div>';
     // Niveau 2 — Commercial
     const coms=(rep.point&&rep.point.commerciaux)||[];
@@ -2496,6 +2503,10 @@
       if(list[idx]) printFicheCommercial(list[idx], rep);
     }));
     document.querySelectorAll('[data-rap-open]').forEach(b=>b.addEventListener('click', ()=>{ S.rapportsDate=b.dataset.rapOpen; loadView('rapports').then(renderView); }));
+    // Niveau 1 : recherche PDV + fiche imprimable d'un PDV (son relevé partagé)
+    const rapPdvSearch=document.querySelector('[data-rap-pdv-search]');
+    if(rapPdvSearch) rapPdvSearch.addEventListener('input', ()=>{ S.rapPdvSearch=rapPdvSearch.value; renderView(); const el=document.querySelector('[data-rap-pdv-search]'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+    document.querySelectorAll('[data-rap-pdv-fiche]').forEach(b=>b.addEventListener('click', ()=>{ openPdvReleve(b.dataset.rapPdvFiche, b.dataset.pdvNom||'PDV'); }));
     const rapClose=document.querySelector('[data-rap-close]');
     if(rapClose) rapClose.addEventListener('click', async ()=>{
       const dt=(S.rapports&&S.rapports.date)||'';
