@@ -697,6 +697,50 @@ app.get('/master/rachats', requireRole('MASTER'), wrap(async (req, res) => {
   res.json(r.rows);
 }));
 
+/* ---- HISTORIQUES DYNAMIQUES (Master) : rechargements, retours, échanges ---- */
+app.get('/master/histo/recharges', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT rc.id, rc.montant_fcfa AS montant, rc.statut, rc.mode_paiement, rc.created_at, rc.paid_at,
+            rc.regle_par_role, rs.nom AS reseau_nom, p.nom_commercial, p.username AS pdv_username
+     FROM uv_recharges rc
+     LEFT JOIN gam_reseaux rs ON rs.id=rc.reseau_id
+     LEFT JOIN users p ON p.id=rc.pdv_id
+     WHERE rc.master_id=$1 ORDER BY rc.created_at DESC LIMIT 500`, [req.user.id]);
+  res.json(r.rows);
+}));
+
+app.get('/master/histo/retours', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT 'RACHAT' AS source, ra.montant, ra.created_at, rs.nom AS reseau_nom,
+            p.nom_commercial, p.username AS pdv_username, NULL::text AS par_nom
+     FROM gam_rachats_uv ra
+     LEFT JOIN gam_reseaux rs ON rs.id=ra.reseau_id
+     LEFT JOIN users p ON p.id=ra.pdv_id
+     WHERE ra.master_id=$1
+     UNION ALL
+     SELECT 'COMMERCIAL' AS source, rc.montant, rc.created_at, rs.nom AS reseau_nom,
+            p.nom_commercial, p.username AS pdv_username, c.username AS par_nom
+     FROM gam_retours_commercial rc
+     LEFT JOIN gam_reseaux rs ON rs.id=rc.reseau_id
+     LEFT JOIN users p ON p.id=rc.pdv_id
+     LEFT JOIN users c ON c.id=rc.commercial_id
+     WHERE rc.master_id=$1
+     ORDER BY created_at DESC LIMIT 500`, [req.user.id]);
+  res.json(r.rows);
+}));
+
+app.get('/master/histo/echanges', requireRole('MASTER'), wrap(async (req, res) => {
+  const r = await pool.query(
+    `SELECT d.id, d.montant, d.statut, d.created_at, d.updated_at,
+            rs.nom AS reseau_nom, rs2.nom AS reseau2_nom, p.nom_commercial, p.username AS pdv_username
+     FROM gam_demandes d
+     LEFT JOIN gam_reseaux rs ON rs.id=d.reseau_id
+     LEFT JOIN gam_reseaux rs2 ON rs2.id=d.reseau2_id
+     LEFT JOIN users p ON p.id=d.pdv_id
+     WHERE d.master_id=$1 AND d.type='ECHANGE' ORDER BY d.created_at DESC LIMIT 500`, [req.user.id]);
+  res.json(r.rows);
+}));
+
 /* ---- RELEVÉ PARTAGÉ PDV <-> MASTER : historique reçu / réglé / reste, avec "encaissé par" ---- */
 async function buildReleve(opts) {
   const pdvId = opts.pdvId, masterId = opts.masterId || null, dateStr = opts.dateStr || null;
