@@ -647,14 +647,15 @@
     reseaux:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     retours:'<path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/>',
     releve:'<path d="M6 2h9l4 4v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v5h5"/><path d="M9 12h6M9 16h6M9 8h3"/>',
-    demandes:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'
+    demandes:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
+    historique:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
   };
   function ico(id){ return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICON[id]||'')+'</svg>'; }
   const NAV=[
-    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Rechargement'},{id:'retours',label:'Retours'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'},{id:'releve',label:'Mon relevé'},{id:'demandes',label:'Demandes'}]},
+    {group:'Général', items:[{id:'dashboard',label:'Tableau de bord'},{id:'recharges',label:'Rechargement'},{id:'retours',label:'Retours'},{id:'recouvrement',label:'Recouvrement'},{id:'caisse',label:'Ma caisse'},{id:'rapports',label:'Points & Rapports'},{id:'releve',label:'Mon relevé'},{id:'demandes',label:'Demandes'},{id:'historique',label:'Historique'}]},
     {group:'Administration', items:[{id:'equipe',label:'Compte Équipe'},{id:'zones',label:'Zones'},{id:'reseaux',label:'Réseaux'},{id:'fonds',label:'Fonds Masters'}]}
   ];
-  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','retours','caisse','rapports','demandes'], COMMERCIAL:['dashboard','recouvrement','caisse','demandes'], PDV:['dashboard','releve','demandes'] };
+  const ROLE_ALLOWED={ SUPERVISEUR:['dashboard','equipe','zones','reseaux','fonds'], MASTER:['dashboard','recharges','retours','caisse','rapports','demandes','historique'], COMMERCIAL:['dashboard','recouvrement','caisse','demandes'], PDV:['dashboard','releve','demandes'] };
   function allowedView(id){ if(!S.auth) return false; return (ROLE_ALLOWED[S.auth.user.role]||['dashboard']).indexOf(id)>=0; }
   function renderNav(){
     $('nav').innerHTML=NAV.map(g=>{ const items=g.items.filter(it=>allowedView(it.id)); if(!items.length) return '';
@@ -666,7 +667,7 @@
   function closeSidebar(){ $('sidebar').classList.remove('open'); $('backdrop').classList.remove('show'); }
 
   /* ---------- VIEWS ---------- */
-  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Rechargement', retours:'Retours', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports', releve:'Mon relevé', demandes:'Demandes' };
+  const VIEW_TITLE={ dashboard:'Tableau de bord', equipe:'Compte Équipe', zones:'Zones', reseaux:'Réseaux', recharges:'Rechargement', retours:'Retours', fonds:'Fonds Masters', recouvrement:'Recouvrement', caisse:'Ma caisse', rapports:'Points & Rapports', releve:'Mon relevé', demandes:'Demandes', historique:'Historique' };
   async function setView(v){ S.view=v; $('view-title').textContent=VIEW_TITLE[v]||''; renderNav(); $('view-root').innerHTML='<div style="padding:30px;color:var(--ink-soft)">Chargement…</div>'; await loadView(v); renderView(); if(v==='demandes') setDemandesBadge(false); }
   async function loadMasterData(){
     try{ S.masterFund=await api('/me/fund'); }catch(e){ S.masterFund=S.masterFund||{solde_uv:0,solde_fcfa:0}; }
@@ -712,6 +713,13 @@
     if(v==='dashboard' && S.auth.user.role==='MASTER'){
       try{ S.masterReseaux=await api('/master/reseaux'); }catch(e){ S.masterReseaux=S.masterReseaux||{reseaux:[],total:0}; }
     }
+    if(v==='historique' && S.auth.user.role==='MASTER'){
+      try{ S.histo={
+        recharges: await api('/master/histo/recharges'),
+        retours: await api('/master/histo/retours'),
+        echanges: await api('/master/histo/echanges')
+      }; }catch(e){ S.histo=S.histo||{recharges:[],retours:[],echanges:[]}; }
+    }
     if(v==='releve' && S.auth.user.role==='PDV'){
       const d=S.releveDate?('?date='+encodeURIComponent(S.releveDate)):'';
       try{ S.releve=await api('/me/releve'+d); }catch(e){ S.releve={_error:e.message||'Erreur serveur'}; }
@@ -729,7 +737,7 @@
       if(role==='PDV'){ try{ S.reseaux=await api('/reseaux'); }catch(e){ S.reseaux=S.reseaux||[]; } }
     }
   }
-  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,retours:renderRetours,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports,releve:renderReleve,demandes:renderDemandes}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
+  function renderView(){ const r={dashboard:renderDashboard,equipe:renderEquipe,zones:renderZones,reseaux:renderReseaux,recharges:renderRecharges,retours:renderRetours,fonds:renderFondsMasters,recouvrement:renderRecouvrement,caisse:renderCaisse,rapports:renderRapports,releve:renderReleve,demandes:renderDemandes,historique:renderHistorique}[S.view]; $('view-root').innerHTML=r?r():''; attachHandlers(); }
 
   function renderDashboard(){
     const u=S.auth.user; const nom=u.nom||u.username;
@@ -1426,6 +1434,71 @@
     const url=role==='PDV'?'/pdv/demandes':(role==='MASTER'?'/master/demandes':'/commercial/demandes');
     try{ S.demandes=await api(url); }catch(e){}
   }
+  /* ---------- HISTORIQUE (Master) : rechargements / retours / échanges, filtrables ---------- */
+  function histoFilter(list){
+    const d=S.histoDate, r=S.histoReseau;
+    return (list||[]).filter(function(it){
+      if(d){ if(!it.created_at || String(it.created_at).slice(0,10)!==d) return false; }
+      if(r){ const ok=(it.reseau_nom===r)||(it.reseau2_nom===r); if(!ok) return false; }
+      return true;
+    });
+  }
+  function histoReseauOptions(list){
+    const set={}; (list||[]).forEach(function(it){ if(it.reseau_nom) set[it.reseau_nom]=1; if(it.reseau2_nom) set[it.reseau2_nom]=1; });
+    return '<option value="">Tous les réseaux</option>'+Object.keys(set).sort().map(function(n){return '<option value="'+esc(n)+'"'+(S.histoReseau===n?' selected':'')+'>'+esc(n)+'</option>';}).join('');
+  }
+  function renderHistorique(){
+    const h=S.histo||{recharges:[],retours:[],echanges:[]};
+    const tab=S.histoTab||'recharges';
+    const header=`<div class="welcome"><h2>Historique 🕘</h2><p>Toutes tes opérations, filtrables par jour et par réseau, avec les totaux.</p></div>`;
+    const tabBtn=function(id,label,n){ return '<button class="btn small" data-histo-tab="'+id+'" style="'+(tab===id?'':'background:none;box-shadow:none;color:var(--brand);border:1px solid var(--brand)')+'" type="button">'+label+' ('+n+')</button>'; };
+    const tabs='<div class="panel"><div style="padding:12px 20px;display:flex;gap:8px;flex-wrap:wrap">'+
+      tabBtn('recharges','Rechargements',(h.recharges||[]).length)+tabBtn('retours','Retours',(h.retours||[]).length)+tabBtn('echanges','Échanges',(h.echanges||[]).length)+
+      '</div></div>';
+    const srcList = tab==='recharges'?h.recharges:(tab==='retours'?h.retours:h.echanges);
+    const filterBar='<div class="panel"><div style="padding:12px 20px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
+      '<label style="font-size:11px;color:var(--ink-soft);font-weight:700">Jour :</label>'+
+      '<input type="date" data-histo-date value="'+esc(S.histoDate||'')+'" style="max-width:160px">'+
+      '<select data-histo-reseau style="max-width:180px">'+histoReseauOptions(srcList)+'</select>'+
+      '<button class="btn small" data-histo-all type="button">Tout</button>'+
+      '</div></div>';
+    let body='';
+    if(tab==='recharges'){
+      const rows=histoFilter(h.recharges);
+      const total=rows.reduce((s,r)=>s+Number(r.montant||0),0);
+      const regle=rows.filter(r=>r.statut==='PAYE').reduce((s,r)=>s+Number(r.montant||0),0);
+      const attente=rows.filter(r=>r.statut==='EN_ATTENTE').reduce((s,r)=>s+Number(r.montant||0),0);
+      const trs=rows.length?rows.map(function(r){
+        const pdv=r.nom_commercial||r.pdv_username||'—';
+        const regleEn=r.statut==='PAYE'?(r.mode_paiement==='UV'?'Retour (UV)':'Espèces'):'—';
+        const st=r.statut==='PAYE'?'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Réglé ✔</span>':'<span class="pill" style="background:var(--warn-soft);color:var(--warn)">En attente</span>';
+        return '<tr><td style="font-size:11px;color:var(--ink-soft);white-space:nowrap">'+fmtDateTime(r.created_at)+'</td><td>'+esc(pdv)+'</td><td>'+esc(r.reseau_nom||'—')+'</td><td style="text-align:right"><b>'+fmtUv(r.montant)+'</b> UV</td><td>'+regleEn+'</td><td>'+st+'</td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="6">Aucun rechargement</td></tr>';
+      body='<div class="stat-row"><div class="stat gold"><div class="lbl">Total rechargé</div><div class="num">'+fmtUv(total)+'</div></div><div class="stat"><div class="lbl">Réglé</div><div class="num">'+fmtUv(regle)+'</div></div><div class="stat red"><div class="lbl">En attente</div><div class="num">'+fmtUv(attente)+'</div></div><div class="stat"><div class="lbl">Nombre</div><div class="num">'+rows.length+'</div></div></div>'+
+        '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Date</th><th>PDV</th><th>Réseau</th><th style="text-align:right">Montant</th><th>Réglé en</th><th>Statut</th></tr></thead><tbody>'+trs+'</tbody></table></div></div>';
+    } else if(tab==='retours'){
+      const rows=histoFilter(h.retours);
+      const total=rows.reduce((s,r)=>s+Number(r.montant||0),0);
+      const trs=rows.length?rows.map(function(r){
+        const pdv=r.nom_commercial||r.pdv_username||'—';
+        const src=r.source==='COMMERCIAL'?('<span class="pill" style="background:#E4ECFB;color:var(--brand)">Payé par commercial</span>'+(r.par_nom?' '+esc(r.par_nom):'')):'<span class="pill" style="background:var(--pos-soft);color:var(--pos)">Rachat (Master)</span>';
+        return '<tr><td style="font-size:11px;color:var(--ink-soft);white-space:nowrap">'+fmtDateTime(r.created_at)+'</td><td>'+esc(pdv)+'</td><td>'+src+'</td><td>'+esc(r.reseau_nom||'—')+'</td><td style="text-align:right"><b>'+fmtUv(r.montant)+'</b> UV</td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="5">Aucun retour</td></tr>';
+      body='<div class="stat-row"><div class="stat gold"><div class="lbl">Total retours (UV)</div><div class="num">'+fmtUv(total)+'</div></div><div class="stat"><div class="lbl">Nombre</div><div class="num">'+rows.length+'</div></div></div>'+
+        '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Date</th><th>PDV</th><th>Traité par</th><th>Réseau</th><th style="text-align:right">Montant</th></tr></thead><tbody>'+trs+'</tbody></table></div></div>';
+    } else {
+      const rows=histoFilter(h.echanges);
+      const total=rows.reduce((s,r)=>s+Number(r.montant||0),0);
+      const trs=rows.length?rows.map(function(r){
+        const pdv=r.nom_commercial||r.pdv_username||'—';
+        return '<tr><td style="font-size:11px;color:var(--ink-soft);white-space:nowrap">'+fmtDateTime(r.created_at)+'</td><td>'+esc(pdv)+'</td><td>'+esc(r.reseau_nom||'—')+' → '+esc(r.reseau2_nom||'—')+'</td><td style="text-align:right"><b>'+fmtUv(r.montant)+'</b> UV</td><td>'+demStatutPill(r)+'</td></tr>';
+      }).join(''):'<tr class="empty-row"><td colspan="5">Aucun échange</td></tr>';
+      body='<div class="stat-row"><div class="stat gold"><div class="lbl">Total échangé (UV)</div><div class="num">'+fmtUv(total)+'</div></div><div class="stat"><div class="lbl">Nombre</div><div class="num">'+rows.length+'</div></div></div>'+
+        '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Date</th><th>PDV</th><th>Donné → Reçu</th><th style="text-align:right">Montant</th><th>Statut</th></tr></thead><tbody>'+trs+'</tbody></table></div></div>';
+    }
+    return header+tabs+filterBar+body;
+  }
+
   function renderDemandes(){ return S.auth.user.role==='PDV'?renderDemandesPdv():renderDemandesAgent(); }
 
   function renderDemandesPdv(){
@@ -2236,6 +2309,14 @@
       try{ await api('/demandes/'+b.dataset.demServe+'/serve',{method:'POST'}); await reloadDemandes(); renderView(); }
       catch(err){ await reloadDemandes(); renderView(); dlgError('Erreur', err.message); }
     }));
+    // ---- Historique (Master) : onglets + filtres ----
+    document.querySelectorAll('[data-histo-tab]').forEach(b=>b.addEventListener('click', ()=>{ S.histoTab=b.dataset.histoTab; S.histoReseau=null; renderView(); }));
+    const hDate=document.querySelector('[data-histo-date]');
+    if(hDate) hDate.addEventListener('change', ()=>{ S.histoDate=hDate.value||null; renderView(); });
+    const hRes=document.querySelector('[data-histo-reseau]');
+    if(hRes) hRes.addEventListener('change', ()=>{ S.histoReseau=hRes.value||null; renderView(); });
+    const hAll=document.querySelector('[data-histo-all]');
+    if(hAll) hAll.addEventListener('click', ()=>{ S.histoDate=null; S.histoReseau=null; renderView(); });
     // ---- Demande PDV : afficher le 2e réseau + adapter les libellés selon le type ----
     const demType=document.querySelector('[data-dem-type]');
     if(demType){
