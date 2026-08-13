@@ -1287,7 +1287,7 @@ async function computeMasterReport(mid, masterUser, dateStr) {
 
   // Niveau 1 : point de chaque PDV (encaissé du jour + reste en attente)
   const pdvs = (await pool.query(
-    `SELECT p.nom_commercial, p.username AS pdv_username,
+    `SELECT p.id AS pdv_id, p.nom_commercial, p.username AS pdv_username,
        COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND rc.paid_at::date=$2::date),0) AS encaisse_jour,
        COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'),0) AS reste
      FROM uv_recharges rc JOIN users p ON p.id=rc.pdv_id
@@ -1296,7 +1296,7 @@ async function computeMasterReport(mid, masterUser, dateStr) {
      HAVING COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='PAYE' AND rc.paid_at::date=$2::date),0) > 0
          OR COALESCE(SUM(rc.montant_fcfa) FILTER (WHERE rc.statut='EN_ATTENTE'),0) > 0
      ORDER BY p.nom_commercial NULLS LAST`, [mid, dateStr])).rows
-    .map(r => ({ pdv: r.nom_commercial || r.pdv_username, encaisse_jour: Number(r.encaisse_jour), reste: Number(r.reste) }));
+    .map(r => ({ pdv_id: r.pdv_id, pdv: r.nom_commercial || r.pdv_username, encaisse_jour: Number(r.encaisse_jour), reste: Number(r.reste) }));
 
   // Niveau 2 : point par commercial (fiche Master <-> Commercial)
   const collected = (await pool.query(
