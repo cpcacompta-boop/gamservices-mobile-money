@@ -1309,12 +1309,22 @@ async function computeMasterReport(mid, masterUser, dateStr) {
   const byCom = {};
   for (const r of collected) {
     const k = r.commercial_id || 0;
-    if (!byCom[k]) byCom[k] = { commercial_nom: [r.c_nom, r.c_prenoms].filter(Boolean).join(' ') || r.c_username || '—', zone_nom: r.zone_nom || '', pdvs: [], total: 0, total_remis: 0 };
+    if (!byCom[k]) byCom[k] = { commercial_id: r.commercial_id, commercial_nom: [r.c_nom, r.c_prenoms].filter(Boolean).join(' ') || r.c_username || '—', zone_nom: r.zone_nom || '', pdvs: [], total: 0, total_remis: 0, retours: 0 };
     const m = Number(r.montant_fcfa || 0);
     byCom[k].pdvs.push({ pdv: r.nom_commercial || r.pdv_username, montant: m, remis: !!r.remis });
     byCom[k].total += m; if (r.remis) byCom[k].total_remis += m;
   }
-  const commerciaux = Object.values(byCom);
+  // Retours payés par chaque commercial ce jour (viennent en déduction de ce qu'il doit reverser)
+  (await pool.query("SELECT commercial_id, COALESCE(SUM(montant),0) s FROM gam_retours_commercial WHERE master_id=$1 AND created_at::date=$2::date GROUP BY commercial_id", [mid, dateStr])).rows
+    .forEach(r => { const k = r.commercial_id || 0; if (!byCom[k]) byCom[k] = { commercial_id: r.commercial_id, commercial_nom: '—', zone_nom: '', pdvs: [], total: 0, total_remis: 0, retours: 0 }; byCom[k].retours = Number(r.s); });
+  const commerciaux = Object.values(byCom).map(c => { c.net = Math.max(0, c.total - c.retours); return c; });
+
+  // Fonds de roulement : UV par réseau + total
+  const reseaux = (await pool.query(
+    `SELECT rs.nom, COALESCE(s.solde_uv,0) AS solde_uv
+     FROM gam_reseaux rs LEFT JOIN gam_solde_reseau s ON s.reseau_id=rs.id AND s.master_id=$1
+     WHERE rs.actif=TRUE OR COALESCE(s.solde_uv,0) <> 0 ORDER BY rs.nom`, [mid])).rows
+    .map(r => ({ nom: r.nom, solde_uv: Number(r.solde_uv) }));
 
   const nonPointes = (await pool.query(
     `SELECT p.nom_commercial, p.username AS pdv_username, COALESCE(SUM(rc.montant_fcfa),0) AS montant
@@ -1328,6 +1338,7 @@ async function computeMasterReport(mid, masterUser, dateStr) {
     date: dateStr,
     master: { nom: [masterUser.nom, masterUser.prenoms].filter(Boolean).join(' ') || masterUser.username },
     fund,
+    reseaux,
     pending_total: Number((await pool.query("SELECT COALESCE(SUM(montant),0) s FROM gam_versements WHERE master_id=$1 AND statut='EN_ATTENTE'", [mid])).rows[0].s),
     jour: { date: dateStr, fcfa_direct: fcfaDirect, fcfa_verse: fcfaVerse, fcfa_total: fcfaDirect + fcfaVerse, uv: uvJour },
     point: { pdvs, commerciaux, non_pointes: nonPointes }
